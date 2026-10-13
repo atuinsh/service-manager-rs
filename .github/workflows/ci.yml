@@ -108,7 +108,11 @@ jobs:
   test-alpine-openrc:
     name: "Test Rust stable for ${{ matrix.test }} w/ ${{ matrix.manager }} (Alpine Linux)"
     runs-on: ubuntu-latest
-    container: dockage/alpine:3.16-openrc
+    container:
+      image: dockage/alpine:3.16-openrc
+      # Without an init, PID 1 is the runner's `tail -f /dev/null`, which never reaps the stopped
+      # service, so start-stop-daemon sees the zombie and reports it "refused to stop".
+      options: --init
     strategy:
       fail-fast: false
       matrix:
