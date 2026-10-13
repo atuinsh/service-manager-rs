@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Minimum supported Rust version is now 1.88, declared via `rust-version`.
+  The previous 1.58.1 claim was never tested: 1.58.1 cannot parse this
+  crate's manifest, and current releases of `plist`, `encoding_rs` and other
+  dependencies require 1.88.
+
 ## [0.11.0] - 2026-02-18
 
 ### Changed

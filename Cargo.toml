@@ -6,6 +6,7 @@ keywords = ["generator"]
 version = "0.11.0"
 authors = ["Chip Senkbeil <chip@senkbeil.org>"]
 edition = "2021"
+rust-version = "1.88"
 homepage = "https://github.com/chipsenkbeil/service-manager-rs"
 repository = "https://github.com/chipsenkbeil/service-manager-rs"
 readme = "README.md"
