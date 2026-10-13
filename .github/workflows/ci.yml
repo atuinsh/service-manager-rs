@@ -110,8 +110,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: dockage/alpine:3.16-openrc
-      # Without an init, PID 1 is the runner's `tail -f /dev/null`, which never reaps the stopped
-      # service, so start-stop-daemon sees the zombie and reports it "refused to stop".
       options: --init
     strategy:
       fail-fast: false
