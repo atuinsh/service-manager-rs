@@ -17,9 +17,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { rust: 1.88.0, os: ubuntu-latest }
-          - { rust: 1.88.0, os: macos-latest }
-          - { rust: 1.88.0, os: windows-latest }
+          - { rust: 1.75.0, os: ubuntu-latest }
+          - { rust: 1.75.0, os: macos-latest }
+          - { rust: 1.75.0, os: windows-latest }
+          - { rust: 1.99.0, os: ubuntu-latest }
+          - { rust: 1.99.0, os: macos-latest }
+          - { rust: 1.99.0, os: windows-latest }
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust ${{ matrix.rust }}
