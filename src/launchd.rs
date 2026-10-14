@@ -5,26 +5,399 @@ use super::{
     ServiceStartCtx, ServiceStopCtx, ServiceUninstallCtx,
 };
 use plist::{Dictionary, Value};
+use rustix::{fs::Uid, process::getuid};
 use std::{
+    convert::Infallible,
+    error::Error,
     ffi::OsStr,
+    fmt::Display,
     fs::OpenOptions,
-    io::{self, Write},
+    io::{self, ErrorKind, Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{self, Command, Output, Stdio},
+    str::FromStr,
     thread,
     time::{Duration, Instant},
 };
 
-static LAUNCHCTL: &str = "/bin/launchctl";
+mod launchctl {
+    use super::*;
+    mod exit_code {}
+
+    /// Get the path to the launchctl binary.
+    fn path() -> &'static Path {
+        static LAUNCHCTL: &str = "/bin/launchctl";
+
+        Path::new(LAUNCHCTL)
+    }
+}
+
+struct LaunchCtl {
+    cmd: Command,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchCtlBootoutError {
+    Timeout,
+    Io(std::io::Error),
+}
+
+impl Error for LaunchCtlBootoutError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            LaunchCtlBootoutError::Timeout => None,
+            LaunchCtlBootoutError::Io(io) => Some(io),
+        }
+    }
+
+    fn cause(&self) -> Option<&dyn Error> {
+        match self {
+            LaunchCtlBootoutError::Timeout => None,
+            LaunchCtlBootoutError::Io(io) => Some(io),
+        }
+    }
+}
+
+impl Display for LaunchCtlBootoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LaunchCtlBootoutError::Timeout => write!(f, "unexpected timeout waiting for bootout"),
+            LaunchCtlBootoutError::Io(io) => write!(f, "{io}"),
+        }
+    }
+}
+
+/// Represents the state of the launchctl service.
+pub enum ServiceState {
+    Spawning,
+    XpcProxy,
+    Running,
+    Sigtermed,
+    Sigkilled,
+    Other(String),
+}
+
+impl ServiceState {
+    pub fn is_booting(self) -> bool {
+        matches!(self, ServiceState::Spawning | ServiceState::XpcProxy)
+    }
+}
+
+impl FromStr for ServiceState {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "spawning" => ServiceState::Spawning,
+            "xpcproxy" => ServiceState::XpcProxy,
+            "running" => ServiceState::Running,
+            "SIGTERMed" => ServiceState::Sigtermed,
+            "SIGKILLed" => ServiceState::Sigkilled,
+            other => ServiceState::Other(other.into()),
+        })
+    }
+}
+
+/// The output of the `launchctl print` command.
+pub struct ServicePrintout {
+    pub state: ServiceState,
+    pub runs: u64,
+    pub exit_timeout: Duration,
+}
+
+impl ServicePrintout {
+    // Get a key from the state printout of a service.
+    fn get_key<T: FromStr>(
+        printout: &str,
+        key: &str,
+        error_factory: FnOnce() -> ServicePrintoutParseError,
+    ) -> Result<T, ServicePrintoutParseError> {
+        let state_start_idx = printout.find(key).ok_or(error_factory)? + key.len();
+        let state_end_idx = printout
+            .get(state_start_idx..)
+            .ok_or(error_factory)?
+            .find("\n")
+            .ok_or(error_factory)?;
+        let state_str: &str = printout
+            .get(state_start_idx..state_end_idx)
+            .ok_or(error_factory)?;
+
+        Ok(T::from_str(state_str)?)
+    }
+}
+
+impl TryFrom<&[u8]> for ServicePrintout {
+    type Error = ServicePrintoutParseError;
+
+    /// Try to parse the output of `launchctl print`.
+    ///
+    /// Please note `launchctl print`'s output is not stable and Apple **EXPLICITLY** says it's not
+    /// stable but we have no other option.
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        // This parser is very stupid but it should work. Apple's print format seems very janky,
+        // mixing strings and atoms. We don't need much out of the print output, so this naive
+        // parsing shoud be enough.
+        //
+        // An example is:
+        //
+        // gui/501/2BUA8C4S2C.com.1password.browser-helper = {
+        //         state = running
+        //         runs = 1
+        //         exit timeout = 5
+        //         ...
+        // }
+        //
+        // We need to capture the three things here, and the absolute easiest way is to "grep"
+        // through the output.
+        let value = str::from_utf8(value)?;
+        let state: ServiceState = Self::get_key(value, "\n\tstate = ")?;
+        let runs: u64 = Self::get_key(value, "\n\truns = ")?;
+        let exit_timeout: u64 = Self::get_key(value, "\n\texit timeout = ")?;
+
+        Ok(Self {
+            state,
+            runs,
+            exit_timeout: Duration::from_secs(exit_timeout),
+        })
+    }
+}
+
+impl ServicePrintout {}
+
+impl LaunchCtl {
+    const LAUNCHCTL_PATH: &'static str = "/bin/launchctl";
+
+    /// `launchctl` exit codes for a service that is not loaded: `ESRCH` from `bootout`, then
+    /// "Could not find specified domain" and "Could not find specified service".
+    pub const NOT_LOADED: [i32; 3] = [3, 112, 113];
+
+    /// `launchctl` exit code for `EPERM`, which a non-root caller gets for the `system` domain.
+    pub const EPERM: i32 = 1;
+
+    /// `launchctl bootout` exit code for `EINPROGRESS`, returned while the job is still exiting.
+    pub const EINPROGRESS: i32 = 36;
+
+    pub fn available() -> bool {
+        Path::new(Self::LAUNCHCTL_PATH).exists()
+    }
+
+    /// `launchctl bootstrap [service-path service-path2 ...]`
+    pub fn bootstrap_plists(
+        domain: ServiceDomain,
+        plists: impl Iterator<Item = impl AsRef<Path>>,
+    ) -> io::Result<process::Output> {
+        Self::start()
+            .arg("bootstrap")
+            .arg(domain.into())
+            .args(plists)
+            .output()
+    }
+
+    /// `launchctl bootout service-target`.
+    ///
+    /// Waits for the launchd to finish tearing out the service. Please note this function can
+    /// block the active thread until the requested service is booted out.
+    pub fn bootout(
+        domain: ServiceDomain,
+        service: &str,
+        timeout: Duration,
+    ) -> Result<(), LaunchCtlBootoutError> {
+        let procedure_start_time = Instant::now();
+
+        const BOOTUP_TIMEOUT: Duration = Duration::from_secs(1);
+        const POLLING_PERIOD: Duration = Duration::from_millis(100);
+
+        // A process may be in progress of being booted in. We have to make sure it's fully loaded
+        // before we try to bootout otherwise bootout will yell at us.
+        let started = Instant::now();
+        let mut status: ServicePrintout;
+        loop {
+            status = Self::print_service(domain, service)?;
+
+            let now = Instant::now();
+            if !status.state.is_booting() {
+                break;
+            } else if now - procedure_start_time >= timeout {
+                return Err(LaunchCtlBootoutError::Timeout);
+            } else if now - started > BOOTUP_TIMEOUT {
+                return Err(LaunchCtlBootoutError::Timeout);
+            }
+
+            std::thread::sleep(POLLING_PERIOD);
+        }
+
+        // Normally launchctl tells us how many seconds before it sigkills the service. We add an
+        // extra second of leeway to make sure the sigkill goes through
+        let bootout_timeout = status.exit_timeout + Duration::from_secs(1);
+
+        // Well now we now that the service is not in the booting up state, we can try to boot it
+        // out.
+        //
+        // We call output_raw here since launchctl will return non-zero exit codes and
+        // [`Self::output`] would abort on those.
+        let output = Self::start().arg("bootout").arg(service).output_raw()?;
+
+        // We then have to block until we can confirm that the service actually goes down.
+        let started = Instant::now();
+        loop {
+            if Self::start()
+                .arg("print")
+                .arg(format!("{}/{service}", domain.into()))
+                .output_raw()?
+                .status
+                .code()
+                // TODO(markovejnovic): Make a const for this.
+                .is_some_and(|c| c == 113)
+            {
+                break;
+            }
+
+            let now = Instant::now();
+            if now - procedure_start_time >= timeout {
+                return Err(LaunchCtlBootoutError::Timeout);
+            } else if now - started > BOOTUP_TIMEOUT {
+                return Err(LaunchCtlBootoutError::Timeout);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// `launchctl kickstart service-target`
+    pub fn kickstart(service: &str) -> io::Result<process::Output> {
+        Self::start().arg("kickstart").arg(service).output()
+    }
+
+    /// `launchctl print service-target`
+    ///
+    /// **Warning**: Apple explicitly documents this API as not being stable and safe to use, but
+    /// unfortunately, I couldn't find a different, more appropriate API. We use this API, but we
+    /// keep the surface of what we read very minimal.
+    pub fn print_service(
+        domain: ServiceDomain,
+        service: &str,
+    ) -> Result<ServicePrintout, ServicePrintoutError> {
+        let stdout = Self::start()
+            .arg("print")
+            .arg(format!("{}/{service}", domain.into()))
+            .output()?
+            .stdout;
+
+        ServicePrintout::try_from(stdout)
+    }
+
+    fn arg(mut self, arg: impl AsRef<OsStr>) -> Self {
+        self.cmd.arg(arg);
+        Self { ..self }
+    }
+
+    fn args(mut self, args: impl Iterator<Item = impl AsRef<OsStr>>) -> Self {
+        self.cmd.args(args);
+        Self { ..self }
+    }
+
+    fn output_raw(mut self) -> io::Result<std::process::Output> {
+        self.cmd.output()
+    }
+
+    /// Run a command, parsing the exit code.
+    fn output(self) -> std::io::Result<std::process::Output> {
+        let output = self.cmd.output()?;
+
+        wrap_output(output).map_err(|err| {
+            let kind = match output.status.code() {
+                Some(EPERM) => io::ErrorKind::PermissionDenied,
+                Some(code) if NOT_LOADED.contains(&code) => io::ErrorKind::NotFound,
+                _ => io::ErrorKind::Other,
+            };
+
+            std::io::Error::new(kind, format!("{}: {err}", self.cmd.into()))
+        })
+    }
+
+    fn start() -> Self {
+        let mut cmd = Command::new(Self::LAUNCHCTL_PATH);
+
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        Self { cmd }
+    }
+}
+
+/// The appropriate file permissions for a PLIST file.
 const PLIST_FILE_PERMISSIONS: u32 = 0o644;
 
-/// `launchctl` exit codes for a service that is not loaded: `ESRCH` from `bootout`, then
-/// "Could not find specified domain" and "Could not find specified service".
-const NOT_LOADED_EXIT_CODES: [i32; 3] = [3, 112, 113];
-/// `launchctl` exit code for `EPERM`, which a non-root caller gets for the `system` domain.
-const EPERM_EXIT_CODE: i32 = 1;
-/// `launchctl bootout` exit code for `EINPROGRESS`, returned while the job is still exiting.
-const EINPROGRESS_EXIT_CODE: i32 = 36;
+/// The longest file name APFS and HFS+ accept, in bytes.
+const PATH_MAX: usize = 255;
+
+/// The domain which a service can run.
+///
+/// `launchd` supports user, gui and system services. It supports more, but they appear to be
+/// irrelevant.
+///
+/// System services are services which run on the system for all the time through which a system is
+/// booted up.
+///
+/// Gui services (or gui agents) start when a user logs into the graphical session and last for as
+/// long as the user is logged in.
+///
+/// User services are background services that run on a per-user basis. The lifetime appears
+/// unclear, as the man page says:
+///
+/// > Targets the user domain for the given UID or a service within that domain. A user domain may
+/// > exist independently of a logged-in user.
+///
+/// For more details on these, please see `man launchctl`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ServiceDomain {
+    /// `user/<uid>/` services.
+    User(Uid),
+    /// `gui/<uid>/` services.
+    Gui(Uid),
+    /// `system/` services.
+    #[default]
+    System,
+}
+
+impl ServiceDomain {
+    /// Infer the service domain from the active execution context.
+    ///
+    /// Deprecated `launchctl` commands would infer the domain in which services would run. For
+    /// example, `launchctl load` would request a service be loaded into an inferred domain. This
+    /// function models this inference.
+    #[must_use]
+    pub fn infer() -> Self {
+        let uid = rustix::process::getuid();
+
+        if uid.is_root() {
+            ServiceDomain::System
+        } else {
+            ServiceDomain::Gui(uid)
+        }
+    }
+
+    /// Determine the appropriate path for creating service plists.
+    #[must_use]
+    pub fn plist_dir(self) -> PathBuf {
+        match self {
+            ServiceDomain::User(uid) => unimplemented!("TODO"),
+            ServiceDomain::Gui(uid) => unimplemented!("TODO"),
+            ServiceDomain::System => PathBuf::from("/Library/LaunchDaemons"),
+        }
+    }
+}
+
+impl From<ServiceDomain> for PathBuf {
+    fn from(value: ServiceDomain) -> PathBuf {
+        match value {
+            ServiceDomain::User(uid) => format!("user/{}/", uid.as_raw()).into(),
+            ServiceDomain::Gui(uid) => format!("gui/{}/", uid.as_raw()).into(),
+            ServiceDomain::System => "system".into(),
+        }
+    }
+}
 
 /// Configuration settings tied to launchd services
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -50,10 +423,12 @@ impl Default for LaunchdInstallConfig {
 ///
 /// System services live in the `system` domain. User services live in the calling user's
 /// `gui/<uid>` domain, which exists only while that user is logged in graphically.
+///
+/// TODO(markovejnovic): Why gui only?
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LaunchdServiceManager {
-    /// Whether or not this manager is operating at the user-level
-    pub user: bool,
+    /// The domain the service covers.
+    pub domain: ServiceDomain,
 
     /// Configuration settings tied to launchd services
     pub config: LaunchdConfig,
@@ -74,7 +449,7 @@ impl LaunchdServiceManager {
     pub fn into_system(self) -> Self {
         Self {
             config: self.config,
-            user: false,
+            domain: ServiceDomain::System,
         }
     }
 
@@ -82,70 +457,27 @@ impl LaunchdServiceManager {
     pub fn into_user(self) -> Self {
         Self {
             config: self.config,
-            user: true,
+            domain: ServiceDomain::User(rustix::process::getuid()),
         }
     }
 
     /// Update manager to use the specified config
     pub fn with_config(self, config: LaunchdConfig) -> Self {
-        Self {
-            config,
-            user: self.user,
-        }
+        Self { config, ..self }
     }
 
-    fn plist_dir(&self) -> io::Result<PathBuf> {
-        if self.user {
-            user_agent_dir_path()
-        } else {
-            Ok(global_daemon_dir_path())
-        }
-    }
-
-    fn service(&self, label: &ServiceLabel) -> io::Result<LaunchdService> {
-        // The longest file name APFS and HFS+ accept, in bytes.
-        const NAME_MAX: usize = 255;
-
-        let qualified_name = label.to_qualified_name();
-        // launchctl ends the label of a service target at its first `/`, reads a target with
-        // nothing after the domain as the domain itself, so `bootout gui/501/` would tear down
-        // the whole login session, and prints the label unescaped, where a control character
-        // could forge a field of `launchctl print`.
-        if qualified_name.is_empty()
-            || qualified_name.contains(|c: char| c == '/' || c.is_control())
-            || qualified_name.len() + ".plist".len() > NAME_MAX
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "launchd label {qualified_name:?} must be non-empty, fit in a file name and \
-                     contain no '/' or control characters"
-                ),
-            ));
-        }
-
-        let domain = if self.user {
-            format!("gui/{}", current_uid()?)
-        } else {
-            String::from("system")
-        };
-
-        Ok(LaunchdService {
-            target: format!("{domain}/{qualified_name}"),
-            domain,
-            plist_path: self.plist_dir()?.join(format!("{qualified_name}.plist")),
-        })
+    fn plist_dir(&self) -> PathBuf {
+        self.domain.plist_dir()
     }
 }
 
 impl ServiceManager for LaunchdServiceManager {
     fn available(&self) -> io::Result<bool> {
-        Path::new(LAUNCHCTL).try_exists()
+        Ok(LaunchCtl::available())
     }
 
     fn install(&self, ctx: ServiceInstallCtx) -> io::Result<()> {
-        let service = self.service(&ctx.label)?;
-        std::fs::create_dir_all(self.plist_dir()?)?;
+        std::fs::create_dir_all(self.plist_dir())?;
 
         let qualified_name = ctx.label.to_qualified_name();
         let plist = match ctx.contents {
@@ -273,15 +605,6 @@ impl ServiceManager for LaunchdServiceManager {
     }
 }
 
-/// A service as `launchctl` addresses it.
-struct LaunchdService {
-    /// Domain target, `system` or `gui/<uid>`.
-    domain: String,
-    /// Service target, `<domain>/<label>`.
-    target: String,
-    plist_path: PathBuf,
-}
-
 impl LaunchdService {
     /// Reads the service's state, or `None` when it is not loaded in its domain.
     fn loaded_state(&self) -> io::Result<Option<LoadedState>> {
@@ -311,11 +634,10 @@ impl LaunchdService {
         };
 
         let args: [&OsStr; 2] = ["bootout".as_ref(), self.target.as_ref()];
-        let output = launchctl(&args)?;
         if is_not_loaded(&output) {
             return Ok(false);
         }
-        if output.status.code() != Some(EINPROGRESS_EXIT_CODE) {
+        if output.status.code() != Some(exit_code::EINPROGRESS) {
             check(&args, output)?;
         }
 
@@ -351,22 +673,6 @@ impl LaunchdService {
             thread::sleep(POLL_INTERVAL);
         }
     }
-
-    fn bootstrap(&self) -> io::Result<()> {
-        let args: [&OsStr; 3] = [
-            "bootstrap".as_ref(),
-            self.domain.as_ref(),
-            self.plist_path.as_ref(),
-        ];
-        check(&args, launchctl(&args)?)?;
-        Ok(())
-    }
-
-    fn kickstart(&self) -> io::Result<()> {
-        let args: [&OsStr; 2] = ["kickstart".as_ref(), self.target.as_ref()];
-        check(&args, launchctl(&args)?)?;
-        Ok(())
-    }
 }
 
 /// The fields of `launchctl print <service-target>` this manager acts on.
@@ -381,27 +687,6 @@ struct LoadedState {
 }
 
 impl LoadedState {
-    fn parse(print: &str) -> Self {
-        let fields = own_fields(print);
-        let field = |name: &str| {
-            fields
-                .iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, value)| *value)
-        };
-
-        Self {
-            state: field("state").unwrap_or_default().to_owned(),
-            spawned: field("runs")
-                .and_then(|runs| runs.parse::<u64>().ok())
-                .is_some_and(|runs| runs > 0),
-            exit_timeout: field("exit timeout")
-                .and_then(|secs| secs.parse::<u64>().ok())
-                .filter(|&secs| secs > 0)
-                .map(Duration::from_secs),
-        }
-    }
-
     /// Whether launchd has spawned the job's process and is still exec'ing its program.
     fn is_spawning(&self) -> bool {
         matches!(self.state.as_str(), "spawning" | "xpcproxy")
@@ -428,60 +713,18 @@ impl LoadedState {
     }
 }
 
-/// The `name = value` fields of the service's own dictionary in `launchctl print` output.
-///
-/// Each nested dictionary, such as a resource coalition with its own `state = active`, is
-/// indented a tab further. launchctl prints argument and environment values unescaped, so a
-/// value can hold a line that looks like a field; only lines at the service's own depth count.
-fn own_fields(print: &str) -> Vec<(&str, &str)> {
-    let mut depth = 0;
-    let mut fields = Vec::new();
-    for line in print.lines() {
-        let text = line.trim_start_matches('\t');
-        let indent = line.len() - text.len();
-        if text == "}" && indent + 1 == depth {
-            depth -= 1;
-            continue;
-        }
-        if indent != depth {
-            continue;
-        }
-        if text.ends_with(" = {") {
-            depth += 1;
-            continue;
-        }
-        if depth != 1 {
-            continue;
-        }
-        if let Some(field) = text.split_once(" = ") {
-            fields.push(field);
-        }
-    }
-
-    fields
-}
-
-fn launchctl(args: &[&OsStr]) -> io::Result<Output> {
-    Command::new(LAUNCHCTL)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .args(args)
-        .output()
-}
-
 fn is_not_loaded(output: &Output) -> bool {
     output
         .status
         .code()
-        .is_some_and(|code| NOT_LOADED_EXIT_CODES.contains(&code))
+        .is_some_and(|code| exit_code::EINPROGRESS.contains(&code))
 }
 
 /// Fails, naming the command, when `launchctl <args>` exited non-zero.
 fn check(args: &[&OsStr], output: Output) -> io::Result<Output> {
     let kind = match output.status.code() {
-        Some(EPERM_EXIT_CODE) => io::ErrorKind::PermissionDenied,
-        Some(code) if NOT_LOADED_EXIT_CODES.contains(&code) => io::ErrorKind::NotFound,
+        Some(exit_code::EPERM) => io::ErrorKind::PermissionDenied,
+        Some(code) if exit_code::NOT_LOADED.contains(&code) => io::ErrorKind::NotFound,
         _ => io::ErrorKind::Other,
     };
 
@@ -542,18 +785,6 @@ fn current_uid() -> io::Result<u32> {
     ))
 }
 
-#[inline]
-fn global_daemon_dir_path() -> PathBuf {
-    PathBuf::from("/Library/LaunchDaemons")
-}
-
-fn user_agent_dir_path() -> io::Result<PathBuf> {
-    Ok(dirs::home_dir()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Unable to locate home directory"))?
-        .join("Library")
-        .join("LaunchAgents"))
-}
-
 fn make_plist<'a>(
     config: &LaunchdInstallConfig,
     label: &str,
@@ -609,7 +840,7 @@ fn make_plist<'a>(
             }
             RestartPolicy::OnFailure {
                 delay_secs,
-                max_retries: _, // TODO: no direct launchd equivalent
+                max_retries: _,      // TODO: no direct launchd equivalent
                 reset_after_secs: _, // TODO: no direct launchd equivalent
             } => {
                 // Create KeepAlive dictionary with SuccessfulExit=false
