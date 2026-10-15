@@ -55,6 +55,19 @@ impl From<LaunchCtlWaitError> for LaunchCtlBootoutError {
     }
 }
 
+impl From<LaunchCtlBootoutError> for io::Error {
+    fn from(err: LaunchCtlBootoutError) -> Self {
+        let kind = match &err {
+            LaunchCtlBootoutError::Timeout => io::ErrorKind::TimedOut,
+            LaunchCtlBootoutError::Io(io) => io.kind(),
+            LaunchCtlBootoutError::Print(print) => print.kind(),
+            LaunchCtlBootoutError::NotLoaded => io::ErrorKind::NotFound,
+        };
+
+        io::Error::new(kind, err)
+    }
+}
+
 /// Errors thrown when waiting on a service with [`LaunchCtl::wait_until`].
 #[derive(Debug)]
 pub enum LaunchCtlWaitError {
@@ -85,6 +98,17 @@ impl Display for LaunchCtlWaitError {
 impl From<ServicePrintoutError> for LaunchCtlWaitError {
     fn from(err: ServicePrintoutError) -> Self {
         LaunchCtlWaitError::Print(err)
+    }
+}
+
+impl From<LaunchCtlWaitError> for io::Error {
+    fn from(err: LaunchCtlWaitError) -> Self {
+        let kind = match &err {
+            LaunchCtlWaitError::Timeout => io::ErrorKind::TimedOut,
+            LaunchCtlWaitError::Print(print) => print.kind(),
+        };
+
+        io::Error::new(kind, err)
     }
 }
 
@@ -262,6 +286,23 @@ impl From<ServicePrintoutParseError> for ServicePrintoutError {
     }
 }
 
+impl ServicePrintoutError {
+    /// The `io::ErrorKind` this error becomes when converted to an `io::Error`.
+    fn kind(&self) -> io::ErrorKind {
+        match self {
+            ServicePrintoutError::Io(io) => io.kind(),
+            ServicePrintoutError::DomainNotFound(_) => io::ErrorKind::NotFound,
+            ServicePrintoutError::Parse(_) => io::ErrorKind::InvalidData,
+        }
+    }
+}
+
+impl From<ServicePrintoutError> for io::Error {
+    fn from(err: ServicePrintoutError) -> Self {
+        io::Error::new(err.kind(), err)
+    }
+}
+
 impl ServiceInfo {
     /// How long launchd can take to tear the job down once it has been signalled.
     pub fn teardown_timeout(&self) -> Duration {
@@ -398,12 +439,12 @@ impl LaunchCtl {
 
     /// `launchctl bootstrap [service-path service-path2 ...]`
     pub fn bootstrap_plists(
-        domain: ServiceDomain,
+        domain: &str,
         plists: impl Iterator<Item = impl AsRef<OsStr>>,
     ) -> io::Result<process::Output> {
         Self::start()
             .arg("bootstrap")
-            .arg(String::from(domain))
+            .arg(domain)
             .args(plists)
             .output()
     }
