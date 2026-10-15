@@ -27,7 +27,6 @@ cfg-if = "1.0"
 clap = { version = "4", features = ["derive"], optional = true }
 dirs = "4.0"
 log = "0.4"
-# Value parsing and XML writing need none of the serde support plist enables by default
 plist = { version = "1.1", default-features = false }
 serde = { version = "1", features = ["derive"], optional = true }
 which = "4.0"
