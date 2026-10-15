@@ -216,8 +216,9 @@ pub enum ServicePrintoutError {
     /// `launchctl print` could not be run, or failed for a reason other than the service or its
     /// domain not existing.
     Io(io::Error),
-    /// The domain does not exist, such as `gui/<uid>` for a user with no graphical login.
-    DomainNotFound(ServiceDomain),
+    /// The service target's domain does not exist, such as `gui/<uid>` for a user with no
+    /// graphical login.
+    DomainNotFound(String),
     /// `launchctl print` succeeded, but its output could not be parsed.
     Parse(ServicePrintoutParseError),
 }
@@ -239,9 +240,8 @@ impl Display for ServicePrintoutError {
             ServicePrintoutError::Parse(_) => {
                 write!(f, "launchctl print output could not be parsed")
             }
-            ServicePrintoutError::DomainNotFound(domain) => {
-                let domain = PathBuf::from(*domain);
-                write!(f, "launchctl domain `{}` does not exist", domain.display())
+            ServicePrintoutError::DomainNotFound(service_target) => {
+                write!(f, "launchctl domain of `{service_target}` does not exist")
             }
         }
     }
@@ -396,11 +396,11 @@ impl LaunchCtl {
     /// `launchctl bootstrap [service-path service-path2 ...]`
     pub fn bootstrap_plists(
         domain: ServiceDomain,
-        plists: impl Iterator<Item = impl AsRef<Path>>,
+        plists: impl Iterator<Item = impl AsRef<OsStr>>,
     ) -> io::Result<process::Output> {
         Self::start()
             .arg("bootstrap")
-            .arg(domain.into())
+            .arg(String::from(domain))
             .args(plists)
             .output()
     }
@@ -409,21 +409,16 @@ impl LaunchCtl {
     ///
     /// Waits for the launchd to finish tearing out the service. Please note this function can
     /// block the active thread until the requested service is booted out.
-    pub fn bootout(
-        domain: ServiceDomain,
-        service: &str,
-        timeout: Duration,
-    ) -> Result<(), LaunchCtlBootoutError> {
+    pub fn bootout(service_target: &str, timeout: Duration) -> Result<(), LaunchCtlBootoutError> {
         let procedure_start_time = Instant::now();
 
         const BOOTUP_TIMEOUT: Duration = Duration::from_secs(1);
 
         // A process may be in progress of being booted in. We have to make sure it's fully loaded
         // before we try to bootout otherwise bootout will yell at us.
-        let Some(status) =
-            Self::wait_until(domain, service, BOOTUP_TIMEOUT.min(timeout), |info| {
-                !info.state.is_booting()
-            })?
+        let Some(status) = Self::wait_until(service_target, BOOTUP_TIMEOUT.min(timeout), |info| {
+            !info.state.is_booting()
+        })?
         else {
             // Not loaded, so there is nothing to boot out.
             return Ok(());
@@ -434,14 +429,23 @@ impl LaunchCtl {
         //
         // We call output_raw here since launchctl will return non-zero exit codes and
         // [`Self::output`] would abort on those.
-        let output = Self::start().arg("bootout").arg(service).output_raw()?;
+        let mut bootout = Self::start().arg("bootout").arg(service_target);
+        let output = bootout.output_raw()?;
+        match output.status.code() {
+            // The service left its domain since it was read, so there is nothing to wait for.
+            Some(code) if Self::NOT_LOADED.contains(&code) => return Ok(()),
+            // launchd has signalled the job and is still waiting for it to exit.
+            Some(Self::EINPROGRESS) => {}
+            _ => {
+                bootout.map_exit_status(output)?;
+            }
+        }
 
         // We then have to block until we can confirm that the service actually goes down. Only
         // leaving its domain ends this wait, so no info counts as done.
         let remaining = timeout.saturating_sub(procedure_start_time.elapsed());
         Self::wait_until(
-            domain,
-            service,
+            service_target,
             status.teardown_timeout().min(remaining),
             |_| false,
         )?;
@@ -450,28 +454,29 @@ impl LaunchCtl {
     }
 
     /// `launchctl kickstart service-target`
-    pub fn kickstart(service: &str) -> io::Result<process::Output> {
-        Self::start().arg("kickstart").arg(service).output()
+    pub fn kickstart(service_target: &str) -> io::Result<process::Output> {
+        Self::start().arg("kickstart").arg(service_target).output()
     }
 
     /// `launchctl print service-target`
     ///
-    /// Returns `None` when the service is not loaded in `domain`.
+    /// Returns `None` when the service is not loaded.
     ///
     /// **Warning**: Apple explicitly documents this API as not being stable and safe to use, but
     /// unfortunately, I couldn't find a different, more appropriate API. We use this API, but we
     /// keep the surface of what we read very minimal.
     pub fn print_service(
-        domain: ServiceDomain,
-        service: &str,
+        service_target: &str,
     ) -> Result<Option<ServiceInfo>, ServicePrintoutError> {
         let output = Self::start()
             .arg("print")
-            .arg(PathBuf::from(domain).join(service))
+            .arg(service_target)
             .output_raw()?;
         match output.status.code() {
             Some(Self::DOMAIN_NOT_FOUND) => {
-                return Err(ServicePrintoutError::DomainNotFound(domain));
+                return Err(ServicePrintoutError::DomainNotFound(
+                    service_target.to_owned(),
+                ));
             }
             Some(code) if Self::NOT_LOADED.contains(&code) => return Ok(None),
             _ => {}
@@ -486,8 +491,7 @@ impl LaunchCtl {
     ///
     /// Returns the last info read, `None` meaning the service is not loaded.
     pub fn wait_until(
-        domain: ServiceDomain,
-        service: &str,
+        service_target: &str,
         timeout: Duration,
         done: impl Fn(&ServiceInfo) -> bool,
     ) -> Result<Option<ServiceInfo>, LaunchCtlWaitError> {
@@ -495,7 +499,7 @@ impl LaunchCtl {
 
         let started = Instant::now();
         loop {
-            let info = Self::print_service(domain, service)?;
+            let info = Self::print_service(service_target)?;
             if info.as_ref().map_or(true, &done) {
                 return Ok(info);
             }
@@ -517,22 +521,28 @@ impl LaunchCtl {
         Self { ..self }
     }
 
-    fn output_raw(mut self) -> io::Result<std::process::Output> {
+    fn output_raw(&mut self) -> io::Result<std::process::Output> {
         self.cmd.output()
     }
 
     /// Run a command, parsing the exit code.
-    fn output(self) -> std::io::Result<std::process::Output> {
-        let output = self.cmd.output()?;
+    fn output(mut self) -> std::io::Result<std::process::Output> {
+        let output = self.output_raw()?;
+        self.map_exit_status(output)
+    }
+
+    /// Maps a non-zero exit to an `io::Error` whose kind follows the exit code and whose message
+    /// names the command; a zero exit passes `output` through.
+    fn map_exit_status(&self, output: Output) -> io::Result<Output> {
+        let kind = match output.status.code() {
+            Some(Self::EPERM) => io::ErrorKind::PermissionDenied,
+            Some(code) if Self::NOT_LOADED.contains(&code) => io::ErrorKind::NotFound,
+            _ => io::ErrorKind::Other,
+        };
 
         wrap_output(output).map_err(|err| {
-            let kind = match output.status.code() {
-                Some(EPERM) => io::ErrorKind::PermissionDenied,
-                Some(code) if NOT_LOADED.contains(&code) => io::ErrorKind::NotFound,
-                _ => io::ErrorKind::Other,
-            };
-
-            std::io::Error::new(kind, format!("{}: {err}", self.cmd.into()))
+            let args: Vec<_> = self.cmd.get_args().map(OsStr::to_string_lossy).collect();
+            io::Error::new(kind, format!("launchctl {}: {err}", args.join(" ")))
         })
     }
 

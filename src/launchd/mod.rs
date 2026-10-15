@@ -87,11 +87,11 @@ impl ServiceDomain {
     }
 }
 
-impl From<ServiceDomain> for PathBuf {
-    fn from(value: ServiceDomain) -> PathBuf {
+impl From<ServiceDomain> for String {
+    fn from(value: ServiceDomain) -> String {
         match value {
-            ServiceDomain::User(uid) => format!("user/{}", uid.as_raw()).into(),
-            ServiceDomain::Gui(uid) => format!("gui/{}", uid.as_raw()).into(),
+            ServiceDomain::User(uid) => format!("user/{}", uid.as_raw()),
+            ServiceDomain::Gui(uid) => format!("gui/{}", uid.as_raw()),
             ServiceDomain::System => "system".into(),
         }
     }
