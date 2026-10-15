@@ -57,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where `launchctl load` reported success and loaded nothing.
 - A failed `LaunchdServiceManager::install` removes the plist it wrote.
 - Reflect the true MSRV of 1.75.
+- `encoding_rs` and `encoding-utils` are now only dependencies under Windows.
 
 ## [0.11.0] - 2026-02-18
 
