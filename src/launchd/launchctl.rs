@@ -158,6 +158,55 @@ impl From<Utf8Error> for ServicePrintoutParseError {
     }
 }
 
+/// Errors reading a service's state with `launchctl print`.
+#[derive(Debug)]
+pub enum ServicePrintoutError {
+    /// `launchctl print` could not be run, or failed for a reason other than the service or its
+    /// domain not existing.
+    Io(io::Error),
+    /// The domain does not exist, such as `gui/<uid>` for a user with no graphical login.
+    DomainNotFound(ServiceDomain),
+    /// `launchctl print` succeeded, but its output could not be parsed.
+    Parse(ServicePrintoutParseError),
+}
+
+impl Error for ServicePrintoutError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            ServicePrintoutError::Io(err) => Some(err),
+            ServicePrintoutError::Parse(err) => Some(err),
+            ServicePrintoutError::DomainNotFound(_) => None,
+        }
+    }
+}
+
+impl Display for ServicePrintoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ServicePrintoutError::Io(_) => write!(f, "launchctl print failed"),
+            ServicePrintoutError::Parse(_) => {
+                write!(f, "launchctl print output could not be parsed")
+            }
+            ServicePrintoutError::DomainNotFound(domain) => {
+                let domain = PathBuf::from(*domain);
+                write!(f, "launchctl domain `{}` does not exist", domain.display())
+            }
+        }
+    }
+}
+
+impl From<io::Error> for ServicePrintoutError {
+    fn from(err: io::Error) -> Self {
+        ServicePrintoutError::Io(err)
+    }
+}
+
+impl From<ServicePrintoutParseError> for ServicePrintoutError {
+    fn from(err: ServicePrintoutParseError) -> Self {
+        ServicePrintoutError::Parse(err)
+    }
+}
+
 impl ServicePrintout {
     /// The `key = value` lines of the service's dictionary, in printed order.
     fn own_fields(
@@ -267,6 +316,10 @@ impl LaunchCtl {
     /// "Could not find specified domain" and "Could not find specified service".
     pub const NOT_LOADED: [i32; 3] = [3, 112, 113];
 
+    /// `launchctl` exit code for "Could not find specified domain", such as `gui/<uid>` for a user
+    /// with no graphical login.
+    pub const DOMAIN_NOT_FOUND: i32 = 112;
+
     /// `launchctl` exit code for `EPERM`, which a non-root caller gets for the `system` domain.
     pub const EPERM: i32 = 1;
 
@@ -366,20 +419,29 @@ impl LaunchCtl {
 
     /// `launchctl print service-target`
     ///
+    /// Returns `None` when the service is not loaded in `domain`.
+    ///
     /// **Warning**: Apple explicitly documents this API as not being stable and safe to use, but
     /// unfortunately, I couldn't find a different, more appropriate API. We use this API, but we
     /// keep the surface of what we read very minimal.
     pub fn print_service(
         domain: ServiceDomain,
         service: &str,
-    ) -> Result<ServicePrintout, ServicePrintoutError> {
-        let stdout = Self::start()
+    ) -> Result<Option<ServicePrintout>, ServicePrintoutError> {
+        let output = Self::start()
             .arg("print")
-            .arg(format!("{}/{service}", domain.into()))
-            .output()?
-            .stdout;
+            .arg(PathBuf::from(domain).join(service))
+            .output_raw()?;
+        match output.status.code() {
+            Some(Self::DOMAIN_NOT_FOUND) => {
+                return Err(ServicePrintoutError::DomainNotFound(domain));
+            }
+            Some(code) if Self::NOT_LOADED.contains(&code) => return Ok(None),
+            _ => {}
+        }
 
-        ServicePrintout::try_from(stdout)
+        let output = wrap_output(output)?;
+        Ok(Some(ServicePrintout::try_from(output.stdout.as_slice())?))
     }
 
     fn arg(mut self, arg: impl AsRef<OsStr>) -> Self {
