@@ -7,12 +7,14 @@ pub(super) struct LaunchCtl {
 }
 
 /// Errors thrown when trying to boot out a service.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum LaunchCtlBootoutError {
     /// There was a timeout attempting to boot out the service.
     Timeout,
     // There was an unexpected IO error booting out the service.
     Io(std::io::Error),
+    /// The service's info could not be read.
+    Print(ServicePrintoutError),
 }
 
 impl Error for LaunchCtlBootoutError {
@@ -20,6 +22,7 @@ impl Error for LaunchCtlBootoutError {
         match self {
             LaunchCtlBootoutError::Timeout => None,
             LaunchCtlBootoutError::Io(io) => Some(io),
+            LaunchCtlBootoutError::Print(err) => Some(err),
         }
     }
 }
@@ -29,7 +32,56 @@ impl Display for LaunchCtlBootoutError {
         match self {
             LaunchCtlBootoutError::Timeout => write!(f, "unexpected timeout waiting for bootout"),
             LaunchCtlBootoutError::Io(_) => write!(f, "unexpected io error"),
+            LaunchCtlBootoutError::Print(_) => write!(f, "could not read the service's info"),
         }
+    }
+}
+
+impl From<io::Error> for LaunchCtlBootoutError {
+    fn from(err: io::Error) -> Self {
+        LaunchCtlBootoutError::Io(err)
+    }
+}
+
+impl From<LaunchCtlWaitError> for LaunchCtlBootoutError {
+    fn from(err: LaunchCtlWaitError) -> Self {
+        match err {
+            LaunchCtlWaitError::Timeout => LaunchCtlBootoutError::Timeout,
+            LaunchCtlWaitError::Print(err) => LaunchCtlBootoutError::Print(err),
+        }
+    }
+}
+
+/// Errors thrown when waiting on a service with [`LaunchCtl::wait_until`].
+#[derive(Debug)]
+pub enum LaunchCtlWaitError {
+    /// The service was still loaded and not done when the timeout passed.
+    Timeout,
+    /// The service's info could not be read.
+    Print(ServicePrintoutError),
+}
+
+impl Error for LaunchCtlWaitError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            LaunchCtlWaitError::Timeout => None,
+            LaunchCtlWaitError::Print(err) => Some(err),
+        }
+    }
+}
+
+impl Display for LaunchCtlWaitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LaunchCtlWaitError::Timeout => write!(f, "timed out waiting for the service"),
+            LaunchCtlWaitError::Print(_) => write!(f, "could not read the service's info"),
+        }
+    }
+}
+
+impl From<ServicePrintoutError> for LaunchCtlWaitError {
+    fn from(err: ServicePrintoutError) -> Self {
+        LaunchCtlWaitError::Print(err)
     }
 }
 
@@ -49,7 +101,7 @@ impl ServiceState {
     /// Whether the service is currently booting up or not.
     ///
     /// After the service has booted up and is running, it will no longer return true for this.
-    pub fn is_booting(self) -> bool {
+    pub fn is_booting(&self) -> bool {
         matches!(self, ServiceState::Spawning | ServiceState::XpcProxy)
     }
 
@@ -85,7 +137,7 @@ impl FromStr for ServiceState {
 }
 
 /// The output of the `launchctl print` command.
-pub struct ServicePrintout {
+pub struct ServiceInfo {
     /// The currently reported state of the service.
     pub state: ServiceState,
     /// How many runs the service had.
@@ -207,7 +259,18 @@ impl From<ServicePrintoutParseError> for ServicePrintoutError {
     }
 }
 
-impl ServicePrintout {
+impl ServiceInfo {
+    /// How long launchd can take to tear the job down once it has been signalled.
+    pub fn teardown_timeout(&self) -> Duration {
+        // launchd SIGKILLs a job still running ExitTimeOut after its SIGTERM, then needs a
+        // moment to reap it. launchd.plist(5) calls an ExitTimeOut of 0 infinite, so that wait
+        // gets a fixed bound.
+        const REAP_MARGIN: Duration = Duration::from_secs(2);
+        const NO_EXIT_TIMEOUT_BOUND: Duration = Duration::from_secs(10);
+
+        self.exit_timeout.unwrap_or(NO_EXIT_TIMEOUT_BOUND) + REAP_MARGIN
+    }
+
     /// The `key = value` lines of the service's dictionary, in printed order.
     fn own_fields(
         printout: &str,
@@ -273,7 +336,7 @@ impl ServicePrintout {
     }
 }
 
-impl TryFrom<&[u8]> for ServicePrintout {
+impl TryFrom<&[u8]> for ServiceInfo {
     type Error = ServicePrintoutParseError;
 
     /// Try to parse the output of `launchctl print`.
@@ -354,30 +417,17 @@ impl LaunchCtl {
         let procedure_start_time = Instant::now();
 
         const BOOTUP_TIMEOUT: Duration = Duration::from_secs(1);
-        const POLLING_PERIOD: Duration = Duration::from_millis(100);
 
         // A process may be in progress of being booted in. We have to make sure it's fully loaded
         // before we try to bootout otherwise bootout will yell at us.
-        let started = Instant::now();
-        let mut status: ServicePrintout;
-        loop {
-            status = Self::print_service(domain, service)?;
-
-            let now = Instant::now();
-            if !status.state.is_booting() {
-                break;
-            } else if now - procedure_start_time >= timeout {
-                return Err(LaunchCtlBootoutError::Timeout);
-            } else if now - started > BOOTUP_TIMEOUT {
-                return Err(LaunchCtlBootoutError::Timeout);
-            }
-
-            std::thread::sleep(POLLING_PERIOD);
-        }
-
-        // Normally launchctl tells us how many seconds before it sigkills the service. We add an
-        // extra second of leeway to make sure the sigkill goes through
-        let bootout_timeout = status.exit_timeout + Duration::from_secs(1);
+        let Some(status) =
+            Self::wait_until(domain, service, BOOTUP_TIMEOUT.min(timeout), |info| {
+                !info.state.is_booting()
+            })?
+        else {
+            // Not loaded, so there is nothing to boot out.
+            return Ok(());
+        };
 
         // Well now we now that the service is not in the booting up state, we can try to boot it
         // out.
@@ -386,28 +436,15 @@ impl LaunchCtl {
         // [`Self::output`] would abort on those.
         let output = Self::start().arg("bootout").arg(service).output_raw()?;
 
-        // We then have to block until we can confirm that the service actually goes down.
-        let started = Instant::now();
-        loop {
-            if Self::start()
-                .arg("print")
-                .arg(format!("{}/{service}", domain.into()))
-                .output_raw()?
-                .status
-                .code()
-                // TODO(markovejnovic): Make a const for this.
-                .is_some_and(|c| c == 113)
-            {
-                break;
-            }
-
-            let now = Instant::now();
-            if now - procedure_start_time >= timeout {
-                return Err(LaunchCtlBootoutError::Timeout);
-            } else if now - started > BOOTUP_TIMEOUT {
-                return Err(LaunchCtlBootoutError::Timeout);
-            }
-        }
+        // We then have to block until we can confirm that the service actually goes down. Only
+        // leaving its domain ends this wait, so no info counts as done.
+        let remaining = timeout.saturating_sub(procedure_start_time.elapsed());
+        Self::wait_until(
+            domain,
+            service,
+            status.teardown_timeout().min(remaining),
+            |_| false,
+        )?;
 
         Ok(())
     }
@@ -427,7 +464,7 @@ impl LaunchCtl {
     pub fn print_service(
         domain: ServiceDomain,
         service: &str,
-    ) -> Result<Option<ServicePrintout>, ServicePrintoutError> {
+    ) -> Result<Option<ServiceInfo>, ServicePrintoutError> {
         let output = Self::start()
             .arg("print")
             .arg(PathBuf::from(domain).join(service))
@@ -441,7 +478,33 @@ impl LaunchCtl {
         }
 
         let output = wrap_output(output)?;
-        Ok(Some(ServicePrintout::try_from(output.stdout.as_slice())?))
+        Ok(Some(ServiceInfo::try_from(output.stdout.as_slice())?))
+    }
+
+    /// Polls the service's info until `done` holds or the service is not loaded, failing once
+    /// `timeout` passes.
+    ///
+    /// Returns the last info read, `None` meaning the service is not loaded.
+    pub fn wait_until(
+        domain: ServiceDomain,
+        service: &str,
+        timeout: Duration,
+        done: impl Fn(&ServiceInfo) -> bool,
+    ) -> Result<Option<ServiceInfo>, LaunchCtlWaitError> {
+        const POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+        let started = Instant::now();
+        loop {
+            let info = Self::print_service(domain, service)?;
+            if info.as_ref().map_or(true, &done) {
+                return Ok(info);
+            }
+            if started.elapsed() >= timeout {
+                return Err(LaunchCtlWaitError::Timeout);
+            }
+
+            thread::sleep(POLL_INTERVAL);
+        }
     }
 
     fn arg(mut self, arg: impl AsRef<OsStr>) -> Self {
