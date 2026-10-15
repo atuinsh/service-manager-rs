@@ -57,6 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where `launchctl load` reported success and loaded nothing.
 - A failed `LaunchdServiceManager::install` removes the plist it wrote.
 - Reflect the true MSRV of 1.75.
+- The `encoding` feature pulls in `encoding_rs` and `encoding-utils` only on
+  Windows. Elsewhere command output is decoded as UTF-8 with `std`, without
+  sniffing a byte order mark.
 
 ## [0.11.0] - 2026-02-18
 
