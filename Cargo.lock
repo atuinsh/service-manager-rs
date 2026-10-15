@@ -833,7 +833,6 @@ name = "service-manager"
 version = "0.11.0"
 dependencies = [
  "assert_fs",
- "cfg-if",
  "clap 4.5.61",
  "dirs",
  "encoding-utils",

@@ -1,4 +1,4 @@
-use cfg_if::cfg_if;
+use super::{ServiceManager, TypedServiceManager};
 use std::io;
 
 /// Represents the kind of service manager
@@ -30,50 +30,44 @@ pub enum ServiceManagerKind {
 impl ServiceManagerKind {
     /// Looks up the kind of service management platform native to the operating system
     pub fn native() -> io::Result<ServiceManagerKind> {
-        cfg_if! {
-            if #[cfg(target_os = "macos")] {
-                Ok(ServiceManagerKind::Launchd)
-            } else if #[cfg(target_os = "windows")] {
-                use super::{ServiceManager, TypedServiceManager};
-
-                // Prefer WinSW over sc.exe, because if it's present, it's likely been explicitly
-                // installed as an alternative to sc.exe.
-                let manager = TypedServiceManager::target(ServiceManagerKind::WinSw);
-                if let Ok(true) = manager.available() {
-                    return Ok(ServiceManagerKind::WinSw);
-                }
-
-                Ok(ServiceManagerKind::Sc)
-            } else if #[cfg(any(
-                target_os = "freebsd",
-                target_os = "dragonfly",
-                target_os = "openbsd",
-                target_os = "netbsd"
-            ))] {
-                Ok(ServiceManagerKind::Rcd)
-            } else if #[cfg(target_os = "linux")] {
-                use super::{ServiceManager, TypedServiceManager};
-
-                let manager = TypedServiceManager::target(ServiceManagerKind::Systemd);
-                if let Ok(true) = manager.available() {
-                    return Ok(ServiceManagerKind::Systemd);
-                }
-
-                let manager = TypedServiceManager::target(ServiceManagerKind::OpenRc);
-                if let Ok(true) = manager.available() {
-                    return Ok(ServiceManagerKind::OpenRc);
-                }
-
-                Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "Only systemd and openrc are supported on Linux",
-                ))
-            } else {
-                Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "Service manager are not supported on current Operating System!",
-                ))
+        if cfg!(target_os = "macos") {
+            Ok(ServiceManagerKind::Launchd)
+        } else if cfg!(target_os = "windows") {
+            // Prefer WinSW over sc.exe, because if it's present, it's likely been explicitly
+            // installed as an alternative to sc.exe.
+            let manager = TypedServiceManager::target(ServiceManagerKind::WinSw);
+            if let Ok(true) = manager.available() {
+                return Ok(ServiceManagerKind::WinSw);
             }
+
+            Ok(ServiceManagerKind::Sc)
+        } else if cfg!(any(
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "openbsd",
+            target_os = "netbsd"
+        )) {
+            Ok(ServiceManagerKind::Rcd)
+        } else if cfg!(target_os = "linux") {
+            let manager = TypedServiceManager::target(ServiceManagerKind::Systemd);
+            if let Ok(true) = manager.available() {
+                return Ok(ServiceManagerKind::Systemd);
+            }
+
+            let manager = TypedServiceManager::target(ServiceManagerKind::OpenRc);
+            if let Ok(true) = manager.available() {
+                return Ok(ServiceManagerKind::OpenRc);
+            }
+
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Only systemd and openrc are supported on Linux",
+            ))
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Service manager are not supported on current Operating System!",
+            ))
         }
     }
 }
