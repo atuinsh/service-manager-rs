@@ -35,7 +35,6 @@ xml-rs = "0.8.19"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# Elsewhere command output is UTF-8, which std decodes
 [target.'cfg(windows)'.dependencies]
 encoding_rs = { version = "0.8", optional = true }
 encoding-utils = { version = "0.1", optional = true }
