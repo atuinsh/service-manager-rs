@@ -11,16 +11,18 @@ pub(super) struct LaunchCtl {
 pub enum LaunchCtlBootoutError {
     /// There was a timeout attempting to boot out the service.
     Timeout,
-    // There was an unexpected IO error booting out the service.
+    /// There was an unexpected IO error booting out the service.
     Io(std::io::Error),
     /// The service's info could not be read.
     Print(ServicePrintoutError),
+    /// The service was not loaded, so there was nothing to boot out.
+    NotLoaded,
 }
 
 impl Error for LaunchCtlBootoutError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            LaunchCtlBootoutError::Timeout => None,
+            LaunchCtlBootoutError::Timeout | LaunchCtlBootoutError::NotLoaded => None,
             LaunchCtlBootoutError::Io(io) => Some(io),
             LaunchCtlBootoutError::Print(err) => Some(err),
         }
@@ -33,6 +35,7 @@ impl Display for LaunchCtlBootoutError {
             LaunchCtlBootoutError::Timeout => write!(f, "unexpected timeout waiting for bootout"),
             LaunchCtlBootoutError::Io(_) => write!(f, "unexpected io error"),
             LaunchCtlBootoutError::Print(_) => write!(f, "could not read the service's info"),
+            LaunchCtlBootoutError::NotLoaded => write!(f, "the service is not loaded"),
         }
     }
 }
@@ -409,6 +412,8 @@ impl LaunchCtl {
     ///
     /// Waits for the launchd to finish tearing out the service. Please note this function can
     /// block the active thread until the requested service is booted out.
+    ///
+    /// Fails with [`LaunchCtlBootoutError::NotLoaded`] when the service is not loaded.
     pub fn bootout(service_target: &str, timeout: Duration) -> Result<(), LaunchCtlBootoutError> {
         let procedure_start_time = Instant::now();
 
@@ -420,8 +425,7 @@ impl LaunchCtl {
             !info.state.is_booting()
         })?
         else {
-            // Not loaded, so there is nothing to boot out.
-            return Ok(());
+            return Err(LaunchCtlBootoutError::NotLoaded);
         };
 
         // Well now we now that the service is not in the booting up state, we can try to boot it
@@ -432,8 +436,10 @@ impl LaunchCtl {
         let mut bootout = Self::start().arg("bootout").arg(service_target);
         let output = bootout.output_raw()?;
         match output.status.code() {
-            // The service left its domain since it was read, so there is nothing to wait for.
-            Some(code) if Self::NOT_LOADED.contains(&code) => return Ok(()),
+            // The service left its domain since it was read.
+            Some(code) if Self::NOT_LOADED.contains(&code) => {
+                return Err(LaunchCtlBootoutError::NotLoaded);
+            }
             // launchd has signalled the job and is still waiting for it to exit.
             Some(Self::EINPROGRESS) => {}
             _ => {
@@ -554,5 +560,67 @@ impl LaunchCtl {
             .stderr(Stdio::piped());
 
         Self { cmd }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parses `printout` as the output of `launchctl print <service-target>`.
+    #[track_caller]
+    fn parse(printout: &str) -> ServiceInfo {
+        ServiceInfo::try_from(printout.as_bytes()).expect("the printout is well formed")
+    }
+
+    #[test]
+    fn service_info_ignores_fields_of_nested_dictionaries() {
+        let info = parse(
+            "gui/501/com.example.app = {\n\
+             \tstate = not running\n\
+             \texit timeout = 40\n\
+             \tresource coalition = {\n\
+             \t\tstate = running\n\
+             \t\truns = 7\n\
+             \t}\n\
+             \truns = 0\n\
+             }\n",
+        );
+
+        assert!(!info.state.is_running());
+        assert_eq!(info.runs, 0);
+        assert_eq!(info.exit_timeout, Some(Duration::from_secs(40)));
+    }
+
+    #[test]
+    fn service_info_ignores_fields_forged_by_an_environment_value() {
+        let info = parse(
+            "gui/501/com.example.app = {\n\
+             \tstate = not running\n\
+             \tenvironment = {\n\
+             \t\tAPP_CONFIG => [retry]\n\
+             \truns = 3\n\
+             \t}\n\
+             \texit timeout = 5\n\
+             \truns = 0\n\
+             }\n",
+        );
+
+        assert_eq!(info.runs, 0);
+    }
+
+    #[test]
+    fn service_info_treats_a_job_being_execed_as_running() {
+        let info = parse(
+            "gui/501/com.example.app = {\n\
+             \tstate = xpcproxy\n\
+             \texit timeout = 0\n\
+             \truns = 1\n\
+             }\n",
+        );
+
+        assert!(info.state.is_running());
+        assert_eq!(info.runs, 1);
+        assert_eq!(info.exit_timeout, None);
     }
 }

@@ -87,13 +87,24 @@ impl ServiceDomain {
     }
 }
 
-impl From<ServiceDomain> for String {
-    fn from(value: ServiceDomain) -> String {
+impl Display for ServiceDomain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match value {
-            ServiceDomain::User(uid) => format!("user/{}", uid.as_raw()),
-            ServiceDomain::Gui(uid) => format!("gui/{}", uid.as_raw()),
-            ServiceDomain::System => "system".into(),
+            ServiceDomain::User(uid) => write!(f, "user/{}", uid.as_raw()),
+            ServiceDomain::Gui(uid) => write!(f, "gui/{}", uid.as_raw()),
+            ServiceDomain::System => write!(f, "system"),
         }
+    }
+}
+
+struct ServiceTarget<TargetStr: AsRef<str>> {
+    domain: ServiceDomain,
+    target: TargetStr,
+}
+
+impl<TargetStr: AsRef<str>> Display for ServiceDomain<TargetStr> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.domain, self.domain)
     }
 }
 
@@ -655,56 +666,6 @@ mod tests {
                 .unwrap_or_else(|| panic!("label {label:?} was accepted"));
             assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "label {label:?}");
         }
-    }
-
-    #[test]
-    fn loaded_state_ignores_fields_of_nested_dictionaries() {
-        let state = LoadedState::parse(
-            "gui/501/com.example.app = {\n\
-             \tstate = not running\n\
-             \texit timeout = 40\n\
-             \tresource coalition = {\n\
-             \t\tstate = running\n\
-             \t\truns = 7\n\
-             \t}\n\
-             \truns = 0\n\
-             }\n",
-        );
-
-        assert!(!state.is_running());
-        assert!(!state.spawned);
-        assert_eq!(state.exit_timeout, Some(Duration::from_secs(40)));
-    }
-
-    #[test]
-    fn loaded_state_ignores_fields_forged_by_an_environment_value() {
-        let state = LoadedState::parse(
-            "gui/501/com.example.app = {\n\
-             \tstate = not running\n\
-             \tenvironment = {\n\
-             \t\tAPP_CONFIG => [retry]\n\
-             \truns = 3\n\
-             \t}\n\
-             \truns = 0\n\
-             }\n",
-        );
-
-        assert!(!state.spawned);
-    }
-
-    #[test]
-    fn loaded_state_treats_a_job_being_execed_as_running() {
-        let state = LoadedState::parse(
-            "gui/501/com.example.app = {\n\
-             \tstate = xpcproxy\n\
-             \texit timeout = 0\n\
-             \truns = 1\n\
-             }\n",
-        );
-
-        assert!(state.is_running());
-        assert!(state.spawned);
-        assert_eq!(state.exit_timeout, None);
     }
 
     #[test]
