@@ -34,6 +34,16 @@ Add the following to your `Cargo.toml`:
 service-manager = "0.10"
 ```
 
+Each service manager sits behind a feature of the same name, all on by default:
+`launchd`, `openrc`, `rcd`, `sc`, `systemd` and `winsw`. To build only the ones
+you need, turn the defaults off and list them. At least one is required, and
+`encoding` is a default too, so list it if you want to keep it:
+
+```toml
+[dependencies]
+service-manager = { version = "0.10", default-features = false, features = ["encoding", "systemd"] }
+```
+
 ## Examples
 
 ### Generic service management

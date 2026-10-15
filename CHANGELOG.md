@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Each service manager sits behind a feature of the same name: `launchd`,
+  `openrc`, `rcd`, `sc`, `systemd` and `winsw`. All are on by default, and
+  building with none of them is a compile error.
 - `LaunchdServiceDomain` names the launchd domain a `LaunchdServiceManager` acts
   on: `system`, `gui/<uid>` or `user/<uid>`.
 
@@ -57,6 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where `launchctl load` reported success and loaded nothing.
 - A failed `LaunchdServiceManager::install` removes the plist it wrote.
 - Reflect the true MSRV of 1.75.
+- **BREAKING CHANGE**: `ServiceManagerKind` and `TypedServiceManager` are
+  `#[non_exhaustive]`, since their variants follow the enabled features and
+  another crate in the build can enable more. A `match` on them needs a `_` arm.
 
 ## [0.11.0] - 2026-02-18
 

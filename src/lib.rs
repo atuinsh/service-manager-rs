@@ -11,23 +11,47 @@ use std::{
     str::FromStr,
 };
 
+#[cfg(not(any(
+    feature = "launchd",
+    feature = "openrc",
+    feature = "rcd",
+    feature = "sc",
+    feature = "systemd",
+    feature = "winsw"
+)))]
+compile_error!(
+    "service-manager needs at least one backend feature: launchd, openrc, rcd, sc, systemd or winsw"
+);
+
 mod kind;
+#[cfg(feature = "launchd")]
 mod launchd;
+#[cfg(feature = "openrc")]
 mod openrc;
+#[cfg(feature = "rcd")]
 mod rcd;
+#[cfg(feature = "sc")]
 mod sc;
+#[cfg(feature = "systemd")]
 mod systemd;
 mod typed;
 mod utils;
+#[cfg(feature = "winsw")]
 mod winsw;
 
 pub use kind::*;
+#[cfg(feature = "launchd")]
 pub use launchd::*;
+#[cfg(feature = "openrc")]
 pub use openrc::*;
+#[cfg(feature = "rcd")]
 pub use rcd::*;
+#[cfg(feature = "sc")]
 pub use sc::*;
+#[cfg(feature = "systemd")]
 pub use systemd::*;
 pub use typed::*;
+#[cfg(feature = "winsw")]
 pub use winsw::*;
 
 /// Interface for a service manager

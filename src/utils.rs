@@ -1,12 +1,27 @@
-use std::{
-    borrow::Cow,
-    fs::OpenOptions,
-    io::{self, Write},
-    path::Path,
-    process::Output,
-};
+use std::io;
+#[cfg(any(
+    feature = "launchd",
+    feature = "openrc",
+    feature = "sc",
+    feature = "systemd",
+    feature = "winsw"
+))]
+use std::{borrow::Cow, process::Output};
+#[cfg(any(
+    feature = "launchd",
+    feature = "openrc",
+    feature = "rcd",
+    feature = "systemd"
+))]
+use std::{fs::OpenOptions, io::Write, path::Path};
 
 /// Writes/overwrites a file, assigning the permissions of `mode` if on a unix system
+#[cfg(any(
+    feature = "launchd",
+    feature = "openrc",
+    feature = "rcd",
+    feature = "systemd"
+))]
 pub fn write_file(path: &Path, data: &[u8], _mode: u32) -> io::Result<()> {
     let mut opts = OpenOptions::new();
     opts.create(true).write(true).truncate(true);
@@ -25,7 +40,16 @@ pub fn write_file(path: &Path, data: &[u8], _mode: u32) -> io::Result<()> {
 }
 
 /// Warp the output of a command in a `std::io::Result` if the command failed
-#[cfg(not(feature = "encoding"))]
+#[cfg(all(
+    not(feature = "encoding"),
+    any(
+        feature = "launchd",
+        feature = "openrc",
+        feature = "sc",
+        feature = "systemd",
+        feature = "winsw"
+    )
+))]
 pub fn wrap_output(output: Output) -> std::io::Result<Output> {
     if output.status.success() {
         Ok(output)
@@ -49,7 +73,16 @@ pub fn wrap_output(output: Output) -> std::io::Result<Output> {
 }
 
 /// Warp the output of a command in a `std::io::Result` if the command failed
-#[cfg(feature = "encoding")]
+#[cfg(all(
+    feature = "encoding",
+    any(
+        feature = "launchd",
+        feature = "openrc",
+        feature = "sc",
+        feature = "systemd",
+        feature = "winsw"
+    )
+))]
 pub fn wrap_output(output: Output) -> std::io::Result<Output> {
     use encoding::decode;
 
@@ -74,7 +107,16 @@ pub fn wrap_output(output: Output) -> std::io::Result<Output> {
     }
 }
 
-#[cfg(feature = "encoding")]
+#[cfg(all(
+    feature = "encoding",
+    any(
+        feature = "launchd",
+        feature = "openrc",
+        feature = "sc",
+        feature = "systemd",
+        feature = "winsw"
+    )
+))]
 pub mod encoding {
     use encoding_rs::UTF_8;
     #[cfg(windows)]
@@ -101,7 +143,7 @@ pub mod encoding {
 }
 
 /// Safe wrappers over the POSIX calls the launchd manager makes.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "launchd"))]
 pub mod posix {
     use std::{
         ffi::{CStr, OsStr},
@@ -200,7 +242,7 @@ pub mod posix {
 /// Stand-ins for the POSIX calls on platforms without uids or a password database.
 ///
 /// launchd does not run on these platforms, so nothing reaches the system with these values.
-#[cfg(not(unix))]
+#[cfg(all(not(unix), feature = "launchd"))]
 pub mod posix {
     use std::{io, path::PathBuf};
 
