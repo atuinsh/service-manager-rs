@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    env,
     fs::OpenOptions,
     io::{self, Write},
     path::Path,
@@ -22,6 +23,27 @@ pub fn write_file(path: &Path, data: &[u8], _mode: u32) -> io::Result<()> {
 
     // Ensure that the data/metadata is synced and catch errors before dropping
     file.sync_all()
+}
+
+/// Whether a directory on `PATH` holds an executable file named `name`.
+pub fn executable_on_path(name: &str) -> bool {
+    let Some(path) = env::var_os("PATH") else {
+        return false;
+    };
+    env::split_paths(&path).any(|dir| is_executable(&dir.join(name)))
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.metadata()
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
 }
 
 /// Warp the output of a command in a `std::io::Result` if the command failed

@@ -120,11 +120,7 @@ impl SystemdServiceManager {
 
 impl ServiceManager for SystemdServiceManager {
     fn available(&self) -> io::Result<bool> {
-        match which::which(SYSTEMCTL) {
-            Ok(_) => Ok(true),
-            Err(which::Error::CannotFindBinaryPath) => Ok(false),
-            Err(x) => Err(io::Error::new(io::ErrorKind::Other, x)),
-        }
+        Ok(utils::executable_on_path(SYSTEMCTL))
     }
 
     fn install(&self, ctx: ServiceInstallCtx) -> io::Result<()> {

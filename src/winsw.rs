@@ -1,4 +1,4 @@
-use crate::utils::wrap_output;
+use crate::utils::{executable_on_path, wrap_output};
 use crate::ServiceStatus;
 
 use super::{
@@ -446,16 +446,15 @@ impl WinSwServiceManager {
 
 impl ServiceManager for WinSwServiceManager {
     fn available(&self) -> io::Result<bool> {
-        match which::which(WINSW_EXE) {
-            Ok(_) => Ok(true),
-            Err(which::Error::CannotFindBinaryPath) => match std::env::var("WINSW_PATH") {
-                Ok(val) => {
-                    let path = PathBuf::from(val);
-                    Ok(path.exists())
-                }
-                Err(_) => Ok(false),
-            },
-            Err(x) => Err(io::Error::new(io::ErrorKind::Other, x)),
+        if executable_on_path(WINSW_EXE) {
+            return Ok(true);
+        }
+        match std::env::var("WINSW_PATH") {
+            Ok(val) => {
+                let path = PathBuf::from(val);
+                Ok(path.exists())
+            }
+            Err(_) => Ok(false),
         }
     }
 

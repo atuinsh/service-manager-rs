@@ -1,4 +1,4 @@
-use crate::utils::wrap_output;
+use crate::utils::{executable_on_path, wrap_output};
 
 use super::{
     RestartPolicy, ServiceInstallCtx, ServiceLevel, ServiceManager, ServiceStartCtx,
@@ -178,11 +178,7 @@ impl ScServiceManager {
 
 impl ServiceManager for ScServiceManager {
     fn available(&self) -> io::Result<bool> {
-        match which::which(SC_EXE) {
-            Ok(_) => Ok(true),
-            Err(which::Error::CannotFindBinaryPath) => Ok(false),
-            Err(x) => Err(io::Error::new(io::ErrorKind::Other, x)),
-        }
+        Ok(executable_on_path(SC_EXE))
     }
 
     fn install(&self, ctx: ServiceInstallCtx) -> io::Result<()> {
