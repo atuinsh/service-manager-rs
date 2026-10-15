@@ -1,27 +1,17 @@
 use std::io;
 #[cfg(any(
-    feature = "launchd",
-    feature = "openrc",
-    feature = "sc",
-    feature = "systemd",
-    feature = "winsw"
+    backend_launchd,
+    backend_openrc,
+    backend_sc,
+    backend_systemd,
+    backend_winsw
 ))]
 use std::{borrow::Cow, process::Output};
-#[cfg(any(
-    feature = "launchd",
-    feature = "openrc",
-    feature = "rcd",
-    feature = "systemd"
-))]
+#[cfg(any(backend_launchd, backend_openrc, backend_rcd, backend_systemd))]
 use std::{fs::OpenOptions, io::Write, path::Path};
 
 /// Writes/overwrites a file, assigning the permissions of `mode` if on a unix system
-#[cfg(any(
-    feature = "launchd",
-    feature = "openrc",
-    feature = "rcd",
-    feature = "systemd"
-))]
+#[cfg(any(backend_launchd, backend_openrc, backend_rcd, backend_systemd))]
 pub fn write_file(path: &Path, data: &[u8], _mode: u32) -> io::Result<()> {
     let mut opts = OpenOptions::new();
     opts.create(true).write(true).truncate(true);
@@ -43,11 +33,11 @@ pub fn write_file(path: &Path, data: &[u8], _mode: u32) -> io::Result<()> {
 #[cfg(all(
     not(feature = "encoding"),
     any(
-        feature = "launchd",
-        feature = "openrc",
-        feature = "sc",
-        feature = "systemd",
-        feature = "winsw"
+        backend_launchd,
+        backend_openrc,
+        backend_sc,
+        backend_systemd,
+        backend_winsw
     )
 ))]
 pub fn wrap_output(output: Output) -> std::io::Result<Output> {
@@ -76,11 +66,11 @@ pub fn wrap_output(output: Output) -> std::io::Result<Output> {
 #[cfg(all(
     feature = "encoding",
     any(
-        feature = "launchd",
-        feature = "openrc",
-        feature = "sc",
-        feature = "systemd",
-        feature = "winsw"
+        backend_launchd,
+        backend_openrc,
+        backend_sc,
+        backend_systemd,
+        backend_winsw
     )
 ))]
 pub fn wrap_output(output: Output) -> std::io::Result<Output> {
@@ -110,11 +100,11 @@ pub fn wrap_output(output: Output) -> std::io::Result<Output> {
 #[cfg(all(
     feature = "encoding",
     any(
-        feature = "launchd",
-        feature = "openrc",
-        feature = "sc",
-        feature = "systemd",
-        feature = "winsw"
+        backend_launchd,
+        backend_openrc,
+        backend_sc,
+        backend_systemd,
+        backend_winsw
     )
 ))]
 pub mod encoding {
@@ -143,7 +133,7 @@ pub mod encoding {
 }
 
 /// Safe wrappers over the POSIX calls the launchd manager makes.
-#[cfg(all(unix, feature = "launchd"))]
+#[cfg(all(unix, backend_launchd))]
 pub mod posix {
     use std::{
         ffi::{CStr, OsStr},
@@ -242,7 +232,7 @@ pub mod posix {
 /// Stand-ins for the POSIX calls on platforms without uids or a password database.
 ///
 /// launchd does not run on these platforms, so nothing reaches the system with these values.
-#[cfg(all(not(unix), feature = "launchd"))]
+#[cfg(all(not(unix), backend_launchd))]
 pub mod posix {
     use std::{io, path::PathBuf};
 

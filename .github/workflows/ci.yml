@@ -40,7 +40,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test
+      - run: cargo test --all-features
   tests:
     name: "Test Rust ${{ matrix.rust }} for ${{ matrix.test }} w/ ${{ matrix.manager }} (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}

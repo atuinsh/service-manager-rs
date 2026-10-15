@@ -34,14 +34,14 @@ Add the following to your `Cargo.toml`:
 service-manager = "0.10"
 ```
 
-Each service manager sits behind a feature of the same name, all on by default:
-`launchd`, `openrc`, `rcd`, `sc`, `systemd` and `winsw`. To build only the ones
-you need, turn the defaults off and list them. At least one is required, and
-`encoding` is a default too, so list it if you want to keep it:
+The service managers native to the target are always built: launchd on macOS,
+systemd and OpenRC on Linux, sc.exe and WinSW on Windows, and rc.d on the BSDs.
+To build one on another target, enable the feature of the same name (`launchd`,
+`openrc`, `rcd`, `sc`, `systemd` or `winsw`):
 
 ```toml
 [dependencies]
-service-manager = { version = "0.10", default-features = false, features = ["encoding", "systemd"] }
+service-manager = { version = "0.10", features = ["systemd"] }
 ```
 
 ## Examples

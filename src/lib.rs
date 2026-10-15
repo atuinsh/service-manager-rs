@@ -1,7 +1,8 @@
-#![doc = include_str!("../README.md")]
+#![cfg_attr(not(doctest), doc = include_str!("../README.md"))]
 
+// Only where launchd is built, since a README example uses LaunchdServiceManager.
 #[doc = include_str!("../README.md")]
-#[cfg(doctest)]
+#[cfg(all(doctest, backend_launchd))]
 pub struct ReadmeDoctests;
 
 use std::{
@@ -11,47 +12,35 @@ use std::{
     str::FromStr,
 };
 
-#[cfg(not(any(
-    feature = "launchd",
-    feature = "openrc",
-    feature = "rcd",
-    feature = "sc",
-    feature = "systemd",
-    feature = "winsw"
-)))]
-compile_error!(
-    "service-manager needs at least one backend feature: launchd, openrc, rcd, sc, systemd or winsw"
-);
-
 mod kind;
-#[cfg(feature = "launchd")]
+#[cfg(backend_launchd)]
 mod launchd;
-#[cfg(feature = "openrc")]
+#[cfg(backend_openrc)]
 mod openrc;
-#[cfg(feature = "rcd")]
+#[cfg(backend_rcd)]
 mod rcd;
-#[cfg(feature = "sc")]
+#[cfg(backend_sc)]
 mod sc;
-#[cfg(feature = "systemd")]
+#[cfg(backend_systemd)]
 mod systemd;
 mod typed;
 mod utils;
-#[cfg(feature = "winsw")]
+#[cfg(backend_winsw)]
 mod winsw;
 
 pub use kind::*;
-#[cfg(feature = "launchd")]
+#[cfg(backend_launchd)]
 pub use launchd::*;
-#[cfg(feature = "openrc")]
+#[cfg(backend_openrc)]
 pub use openrc::*;
-#[cfg(feature = "rcd")]
+#[cfg(backend_rcd)]
 pub use rcd::*;
-#[cfg(feature = "sc")]
+#[cfg(backend_sc)]
 pub use sc::*;
-#[cfg(feature = "systemd")]
+#[cfg(backend_systemd)]
 pub use systemd::*;
 pub use typed::*;
-#[cfg(feature = "winsw")]
+#[cfg(backend_winsw)]
 pub use winsw::*;
 
 /// Interface for a service manager

@@ -1,14 +1,14 @@
-#[cfg(feature = "launchd")]
+#[cfg(backend_launchd)]
 use super::LaunchdServiceManager;
-#[cfg(feature = "openrc")]
+#[cfg(backend_openrc)]
 use super::OpenRcServiceManager;
-#[cfg(feature = "rcd")]
+#[cfg(backend_rcd)]
 use super::RcdServiceManager;
-#[cfg(feature = "sc")]
+#[cfg(backend_sc)]
 use super::ScServiceManager;
-#[cfg(feature = "systemd")]
+#[cfg(backend_systemd)]
 use super::SystemdServiceManager;
-#[cfg(feature = "winsw")]
+#[cfg(backend_winsw)]
 use super::WinSwServiceManager;
 use super::{
     ServiceInstallCtx, ServiceLevel, ServiceManager, ServiceManagerKind, ServiceStartCtx,
@@ -18,42 +18,55 @@ use std::io;
 
 /// Represents an implementation of a known [`ServiceManager`]
 ///
-/// Holds one variant per enabled backend feature, so it is `#[non_exhaustive]`: another crate in
-/// the build can enable more of them.
+/// Holds a variant for each service manager this build compiles. Another crate in the build can
+/// add more through features, so it is `#[non_exhaustive]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TypedServiceManager {
-    #[cfg(feature = "launchd")]
+    #[cfg(backend_launchd)]
     Launchd(LaunchdServiceManager),
-    #[cfg(feature = "openrc")]
+    #[cfg(backend_openrc)]
     OpenRc(OpenRcServiceManager),
-    #[cfg(feature = "rcd")]
+    #[cfg(backend_rcd)]
     Rcd(RcdServiceManager),
-    #[cfg(feature = "sc")]
+    #[cfg(backend_sc)]
     Sc(ScServiceManager),
-    #[cfg(feature = "systemd")]
+    #[cfg(backend_systemd)]
     Systemd(SystemdServiceManager),
-    #[cfg(feature = "winsw")]
+    #[cfg(backend_winsw)]
     WinSw(WinSwServiceManager),
 }
 
 macro_rules! using {
     ($self:ident, $this:ident -> $expr:expr) => {{
         match $self {
-            #[cfg(feature = "launchd")]
+            #[cfg(backend_launchd)]
             TypedServiceManager::Launchd($this) => $expr,
-            #[cfg(feature = "openrc")]
+            #[cfg(backend_openrc)]
             TypedServiceManager::OpenRc($this) => $expr,
-            #[cfg(feature = "rcd")]
+            #[cfg(backend_rcd)]
             TypedServiceManager::Rcd($this) => $expr,
-            #[cfg(feature = "sc")]
+            #[cfg(backend_sc)]
             TypedServiceManager::Sc($this) => $expr,
-            #[cfg(feature = "systemd")]
+            #[cfg(backend_systemd)]
             TypedServiceManager::Systemd($this) => $expr,
-            #[cfg(feature = "winsw")]
+            #[cfg(backend_winsw)]
             TypedServiceManager::WinSw($this) => $expr,
         }
     }};
+}
+
+/// Whether `$self` is the `$variant` backend, false when `$backend` is not built.
+macro_rules! is_variant {
+    ($self:ident, $backend:meta, $variant:ident) => {
+        match $self {
+            #[cfg($backend)]
+            TypedServiceManager::$variant(_) => true,
+            // Unreachable when this is the only backend built, as launchd is on macOS.
+            #[allow(unreachable_patterns)]
+            _ => false,
+        }
+    };
 }
 
 impl ServiceManager for TypedServiceManager {
@@ -104,17 +117,17 @@ impl TypedServiceManager {
     /// default service manager instance
     pub fn target(kind: ServiceManagerKind) -> Self {
         match kind {
-            #[cfg(feature = "launchd")]
+            #[cfg(backend_launchd)]
             ServiceManagerKind::Launchd => Self::Launchd(LaunchdServiceManager::default()),
-            #[cfg(feature = "openrc")]
+            #[cfg(backend_openrc)]
             ServiceManagerKind::OpenRc => Self::OpenRc(OpenRcServiceManager::default()),
-            #[cfg(feature = "rcd")]
+            #[cfg(backend_rcd)]
             ServiceManagerKind::Rcd => Self::Rcd(RcdServiceManager::default()),
-            #[cfg(feature = "sc")]
+            #[cfg(backend_sc)]
             ServiceManagerKind::Sc => Self::Sc(ScServiceManager::default()),
-            #[cfg(feature = "systemd")]
+            #[cfg(backend_systemd)]
             ServiceManagerKind::Systemd => Self::Systemd(SystemdServiceManager::default()),
-            #[cfg(feature = "winsw")]
+            #[cfg(backend_winsw)]
             ServiceManagerKind::WinSw => Self::WinSw(WinSwServiceManager::default()),
         }
     }
@@ -135,78 +148,72 @@ impl TypedServiceManager {
     }
 
     /// Returns true if [`ServiceManager`] instance is for `launchd`
-    #[cfg(feature = "launchd")]
     pub fn is_launchd(&self) -> bool {
-        matches!(self, Self::Launchd(_))
+        is_variant!(self, backend_launchd, Launchd)
     }
 
     /// Returns true if [`ServiceManager`] instance is for `OpenRC`
-    #[cfg(feature = "openrc")]
     pub fn is_openrc(&self) -> bool {
-        matches!(self, Self::OpenRc(_))
+        is_variant!(self, backend_openrc, OpenRc)
     }
 
     /// Returns true if [`ServiceManager`] instance is for `rc.d`
-    #[cfg(feature = "rcd")]
     pub fn is_rc_d(&self) -> bool {
-        matches!(self, Self::Rcd(_))
+        is_variant!(self, backend_rcd, Rcd)
     }
 
     /// Returns true if [`ServiceManager`] instance is for `sc`
-    #[cfg(feature = "sc")]
     pub fn is_sc(&self) -> bool {
-        matches!(self, Self::Sc(_))
+        is_variant!(self, backend_sc, Sc)
     }
 
     /// Returns true if [`ServiceManager`] instance is for `systemd`
-    #[cfg(feature = "systemd")]
     pub fn is_systemd(&self) -> bool {
-        matches!(self, Self::Systemd(_))
+        is_variant!(self, backend_systemd, Systemd)
     }
 
     /// Returns true if [`ServiceManager`] instance is for `winsw`
-    #[cfg(feature = "winsw")]
     pub fn is_winsw(&self) -> bool {
-        matches!(self, Self::WinSw(_))
+        is_variant!(self, backend_winsw, WinSw)
     }
 }
 
-#[cfg(feature = "launchd")]
+#[cfg(backend_launchd)]
 impl From<super::LaunchdServiceManager> for TypedServiceManager {
     fn from(manager: super::LaunchdServiceManager) -> Self {
         Self::Launchd(manager)
     }
 }
 
-#[cfg(feature = "openrc")]
+#[cfg(backend_openrc)]
 impl From<super::OpenRcServiceManager> for TypedServiceManager {
     fn from(manager: super::OpenRcServiceManager) -> Self {
         Self::OpenRc(manager)
     }
 }
 
-#[cfg(feature = "rcd")]
+#[cfg(backend_rcd)]
 impl From<super::RcdServiceManager> for TypedServiceManager {
     fn from(manager: super::RcdServiceManager) -> Self {
         Self::Rcd(manager)
     }
 }
 
-#[cfg(feature = "sc")]
+#[cfg(backend_sc)]
 impl From<super::ScServiceManager> for TypedServiceManager {
     fn from(manager: super::ScServiceManager) -> Self {
         Self::Sc(manager)
     }
 }
 
-#[cfg(feature = "systemd")]
+#[cfg(backend_systemd)]
 impl From<super::SystemdServiceManager> for TypedServiceManager {
     fn from(manager: super::SystemdServiceManager) -> Self {
         Self::Systemd(manager)
     }
 }
 
-#[cfg(feature = "winsw")]
+#[cfg(backend_winsw)]
 impl From<super::WinSwServiceManager> for TypedServiceManager {
     fn from(manager: super::WinSwServiceManager) -> Self {
         Self::WinSw(manager)
