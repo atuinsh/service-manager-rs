@@ -25,12 +25,12 @@ members = ["system-tests"]
 [dependencies]
 cfg-if = "1"
 clap = { version = "4", features = ["derive"], optional = true }
-dirs = { version = "4", optional = true }
+dirs = "4"
 log = "0.4"
-plist = { version = "1", default-features = false, optional = true }
+plist = { version = "1", default-features = false }
 serde = { version = "1", features = ["derive"], optional = true }
-which = { version = "8", optional = true }
-xml-rs = { version = "0.8", optional = true }
+which = "8"
+xml-rs = "0.8"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
