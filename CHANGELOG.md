@@ -57,6 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where `launchctl load` reported success and loaded nothing.
 - A failed `LaunchdServiceManager::install` removes the plist it wrote.
 - Reflect the true MSRV of 1.75.
+- `systemd_user_dir_path` is `$XDG_CONFIG_HOME/systemd/user`, or
+  `~/.config/systemd/user`, on every platform. On macOS and Windows it was under
+  the platform's config directory, such as `~/Library/Application Support`.
 
 ## [0.11.0] - 2026-02-18
 

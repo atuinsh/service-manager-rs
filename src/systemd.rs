@@ -5,7 +5,7 @@ use super::{
     ServiceStopCtx, ServiceUninstallCtx,
 };
 use std::{
-    fmt, io,
+    env, fmt, io,
     path::PathBuf,
     process::{Command, Output, Stdio},
 };
@@ -249,11 +249,28 @@ pub fn systemd_global_dir_path() -> PathBuf {
     PathBuf::from("/etc/systemd/system")
 }
 
+/// `$XDG_CONFIG_HOME/systemd/user`, or `~/.config/systemd/user` when `XDG_CONFIG_HOME` is unset
+/// or relative.
 pub fn systemd_user_dir_path() -> io::Result<PathBuf> {
-    Ok(dirs::config_dir()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Unable to locate home directory"))?
-        .join("systemd")
-        .join("user"))
+    Ok(xdg_config_home()?.join("systemd").join("user"))
+}
+
+/// `$XDG_CONFIG_HOME`, else `~/.config`.
+///
+/// A relative `XDG_CONFIG_HOME` is ignored, as the XDG base directory spec says, and an unset or
+/// empty `HOME` falls back to the calling user's home in the password database.
+fn xdg_config_home() -> io::Result<PathBuf> {
+    if let Some(dir) = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+    {
+        return Ok(dir);
+    }
+    let home = match env::var_os("HOME").filter(|home| !home.is_empty()) {
+        Some(home) => PathBuf::from(home),
+        None => utils::posix::home_dir(utils::posix::getuid())?,
+    };
+    Ok(home.join(".config"))
 }
 
 fn make_service(
