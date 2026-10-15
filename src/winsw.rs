@@ -592,7 +592,6 @@ fn winsw_exe(cmd: &str, service_name: &str, working_dir_path: &Path) -> io::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use assert_fs::prelude::*;
     use indoc::indoc;
     use std::ffi::OsString;
     use std::io::Cursor;
@@ -745,8 +744,8 @@ mod tests {
 
     #[test]
     fn test_service_configuration_with_mandatory_elements() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let service_config_file = temp_dir.child("service_config.xml");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service_config_file = temp_dir.path().join("service_config.xml");
 
         let ctx = ServiceInstallCtx {
             label: "org.example.my_service".parse().unwrap(),
@@ -765,15 +764,15 @@ mod tests {
         };
 
         WinSwServiceManager::write_service_configuration(
-            &service_config_file.to_path_buf(),
+            &service_config_file,
             &ctx,
             &WinSwConfig::default(),
         )
         .unwrap();
 
-        let xml = std::fs::read_to_string(service_config_file.path()).unwrap();
+        let xml = std::fs::read_to_string(&service_config_file).unwrap();
 
-        service_config_file.assert(predicates::path::is_file());
+        assert!(service_config_file.is_file());
         assert_eq!("org.example.my_service", get_element_value(&xml, "id"));
         assert_eq!("org.example.my_service", get_element_value(&xml, "name"));
         assert_eq!(
@@ -793,8 +792,8 @@ mod tests {
 
     #[test]
     fn test_service_configuration_with_autostart_false() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let service_config_file = temp_dir.child("service_config.xml");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service_config_file = temp_dir.path().join("service_config.xml");
 
         let ctx = ServiceInstallCtx {
             label: "org.example.my_service".parse().unwrap(),
@@ -813,15 +812,15 @@ mod tests {
         };
 
         WinSwServiceManager::write_service_configuration(
-            &service_config_file.to_path_buf(),
+            &service_config_file,
             &ctx,
             &WinSwConfig::default(),
         )
         .unwrap();
 
-        let xml = std::fs::read_to_string(service_config_file.path()).unwrap();
+        let xml = std::fs::read_to_string(&service_config_file).unwrap();
 
-        service_config_file.assert(predicates::path::is_file());
+        assert!(service_config_file.is_file());
         assert_eq!("org.example.my_service", get_element_value(&xml, "id"));
         assert_eq!("org.example.my_service", get_element_value(&xml, "name"));
         assert_eq!(
@@ -841,8 +840,8 @@ mod tests {
 
     #[test]
     fn test_service_configuration_with_special_start_type_should_override_autostart() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let service_config_file = temp_dir.child("service_config.xml");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service_config_file = temp_dir.path().join("service_config.xml");
 
         let ctx = ServiceInstallCtx {
             label: "org.example.my_service".parse().unwrap(),
@@ -862,16 +861,12 @@ mod tests {
 
         let mut config = WinSwConfig::default();
         config.options.start_mode = Some(WinSwStartType::Boot);
-        WinSwServiceManager::write_service_configuration(
-            &service_config_file.to_path_buf(),
-            &ctx,
-            &config,
-        )
-        .unwrap();
+        WinSwServiceManager::write_service_configuration(&service_config_file, &ctx, &config)
+            .unwrap();
 
-        let xml = std::fs::read_to_string(service_config_file.path()).unwrap();
+        let xml = std::fs::read_to_string(&service_config_file).unwrap();
 
-        service_config_file.assert(predicates::path::is_file());
+        assert!(service_config_file.is_file());
         assert_eq!("org.example.my_service", get_element_value(&xml, "id"));
         assert_eq!("org.example.my_service", get_element_value(&xml, "name"));
         assert_eq!(
@@ -891,8 +886,8 @@ mod tests {
 
     #[test]
     fn test_service_configuration_with_full_options() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let service_config_file = temp_dir.child("service_config.xml");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service_config_file = temp_dir.path().join("service_config.xml");
 
         let ctx = ServiceInstallCtx {
             label: "org.example.my_service".parse().unwrap(),
@@ -943,17 +938,13 @@ mod tests {
             service_definition_dir_path: PathBuf::from("C:\\Temp\\service-definitions"),
         };
 
-        WinSwServiceManager::write_service_configuration(
-            &service_config_file.to_path_buf(),
-            &ctx,
-            &config,
-        )
-        .unwrap();
+        WinSwServiceManager::write_service_configuration(&service_config_file, &ctx, &config)
+            .unwrap();
 
-        let xml = std::fs::read_to_string(service_config_file.path()).unwrap();
+        let xml = std::fs::read_to_string(&service_config_file).unwrap();
         println!("{xml}");
 
-        service_config_file.assert(predicates::path::is_file());
+        assert!(service_config_file.is_file());
         assert_eq!("org.example.my_service", get_element_value(&xml, "id"));
         assert_eq!("org.example.my_service", get_element_value(&xml, "name"));
         assert_eq!(
@@ -1018,8 +1009,8 @@ mod tests {
 
     #[test]
     fn test_service_configuration_with_contents() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let service_config_file = temp_dir.child("service_config.xml");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service_config_file = temp_dir.path().join("service_config.xml");
 
         let contents = indoc! {r#"
             <service>
@@ -1048,15 +1039,15 @@ mod tests {
         };
 
         WinSwServiceManager::write_service_configuration(
-            &service_config_file.to_path_buf(),
+            &service_config_file,
             &ctx,
             &WinSwConfig::default(),
         )
         .unwrap();
 
-        let xml = std::fs::read_to_string(service_config_file.path()).unwrap();
+        let xml = std::fs::read_to_string(&service_config_file).unwrap();
 
-        service_config_file.assert(predicates::path::is_file());
+        assert!(service_config_file.is_file());
         assert_eq!("jenkins", get_element_value(&xml, "id"));
         assert_eq!("Jenkins", get_element_value(&xml, "name"));
         assert_eq!("java", get_element_value(&xml, "executable"));
@@ -1072,8 +1063,8 @@ mod tests {
 
     #[test]
     fn test_service_configuration_with_invalid_contents() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let service_config_file = temp_dir.child("service_config.xml");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service_config_file = temp_dir.path().join("service_config.xml");
 
         let ctx = ServiceInstallCtx {
             label: "org.example.my_service".parse().unwrap(),
@@ -1092,7 +1083,7 @@ mod tests {
         };
 
         let result = WinSwServiceManager::write_service_configuration(
-            &service_config_file.to_path_buf(),
+            &service_config_file,
             &ctx,
             &WinSwConfig::default(),
         );
@@ -1108,8 +1099,8 @@ mod tests {
 
     #[test]
     fn test_service_configuration_with_max_retries() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let service_config_file = temp_dir.child("service_config.xml");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service_config_file = temp_dir.path().join("service_config.xml");
 
         let ctx = ServiceInstallCtx {
             label: "org.example.my_service".parse().unwrap(),
@@ -1128,13 +1119,13 @@ mod tests {
         };
 
         WinSwServiceManager::write_service_configuration(
-            &service_config_file.to_path_buf(),
+            &service_config_file,
             &ctx,
             &WinSwConfig::default(),
         )
         .unwrap();
 
-        let xml = std::fs::read_to_string(service_config_file.path()).unwrap();
+        let xml = std::fs::read_to_string(&service_config_file).unwrap();
 
         // Should have 4 onfailure elements: 3 restart + 1 none
         let onfailure_elements = get_all_elements_attributes(&xml, "onfailure");
@@ -1159,8 +1150,8 @@ mod tests {
 
     #[test]
     fn test_service_configuration_with_reset_after_secs() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let service_config_file = temp_dir.child("service_config.xml");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service_config_file = temp_dir.path().join("service_config.xml");
 
         let ctx = ServiceInstallCtx {
             label: "org.example.my_service".parse().unwrap(),
@@ -1179,13 +1170,13 @@ mod tests {
         };
 
         WinSwServiceManager::write_service_configuration(
-            &service_config_file.to_path_buf(),
+            &service_config_file,
             &ctx,
             &WinSwConfig::default(),
         )
         .unwrap();
 
-        let xml = std::fs::read_to_string(service_config_file.path()).unwrap();
+        let xml = std::fs::read_to_string(&service_config_file).unwrap();
 
         // Single onfailure element (no max_retries)
         let onfailure_elements = get_all_elements_attributes(&xml, "onfailure");
@@ -1201,8 +1192,8 @@ mod tests {
 
     #[test]
     fn test_service_configuration_with_max_retries_and_reset_after_secs() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let service_config_file = temp_dir.child("service_config.xml");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service_config_file = temp_dir.path().join("service_config.xml");
 
         let ctx = ServiceInstallCtx {
             label: "org.example.my_service".parse().unwrap(),
@@ -1221,13 +1212,13 @@ mod tests {
         };
 
         WinSwServiceManager::write_service_configuration(
-            &service_config_file.to_path_buf(),
+            &service_config_file,
             &ctx,
             &WinSwConfig::default(),
         )
         .unwrap();
 
-        let xml = std::fs::read_to_string(service_config_file.path()).unwrap();
+        let xml = std::fs::read_to_string(&service_config_file).unwrap();
 
         // 3 onfailure elements: 2 restart + 1 none
         let onfailure_elements = get_all_elements_attributes(&xml, "onfailure");
@@ -1248,8 +1239,8 @@ mod tests {
 
     #[test]
     fn test_service_configuration_with_no_retries_preserves_current_behavior() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let service_config_file = temp_dir.child("service_config.xml");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service_config_file = temp_dir.path().join("service_config.xml");
 
         let ctx = ServiceInstallCtx {
             label: "org.example.my_service".parse().unwrap(),
@@ -1268,13 +1259,13 @@ mod tests {
         };
 
         WinSwServiceManager::write_service_configuration(
-            &service_config_file.to_path_buf(),
+            &service_config_file,
             &ctx,
             &WinSwConfig::default(),
         )
         .unwrap();
 
-        let xml = std::fs::read_to_string(service_config_file.path()).unwrap();
+        let xml = std::fs::read_to_string(&service_config_file).unwrap();
 
         // Single onfailure element (backwards compatible)
         let onfailure_elements = get_all_elements_attributes(&xml, "onfailure");
@@ -1294,8 +1285,8 @@ mod tests {
 
     #[test]
     fn test_winsw_specific_config_takes_precedence_over_max_retries() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let service_config_file = temp_dir.child("service_config.xml");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service_config_file = temp_dir.path().join("service_config.xml");
 
         let ctx = ServiceInstallCtx {
             label: "org.example.my_service".parse().unwrap(),
@@ -1322,14 +1313,10 @@ mod tests {
             ..WinSwConfig::default()
         };
 
-        WinSwServiceManager::write_service_configuration(
-            &service_config_file.to_path_buf(),
-            &ctx,
-            &config,
-        )
-        .unwrap();
+        WinSwServiceManager::write_service_configuration(&service_config_file, &ctx, &config)
+            .unwrap();
 
-        let xml = std::fs::read_to_string(service_config_file.path()).unwrap();
+        let xml = std::fs::read_to_string(&service_config_file).unwrap();
 
         // WinSW-specific config should produce single element, ignoring max_retries
         let onfailure_elements = get_all_elements_attributes(&xml, "onfailure");
@@ -1346,8 +1333,8 @@ mod tests {
 
     #[test]
     fn test_winsw_specific_reset_failure_time_takes_precedence() {
-        let temp_dir = assert_fs::TempDir::new().unwrap();
-        let service_config_file = temp_dir.child("service_config.xml");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service_config_file = temp_dir.path().join("service_config.xml");
 
         let ctx = ServiceInstallCtx {
             label: "org.example.my_service".parse().unwrap(),
@@ -1374,14 +1361,10 @@ mod tests {
             ..WinSwConfig::default()
         };
 
-        WinSwServiceManager::write_service_configuration(
-            &service_config_file.to_path_buf(),
-            &ctx,
-            &config,
-        )
-        .unwrap();
+        WinSwServiceManager::write_service_configuration(&service_config_file, &ctx, &config)
+            .unwrap();
 
-        let xml = std::fs::read_to_string(service_config_file.path()).unwrap();
+        let xml = std::fs::read_to_string(&service_config_file).unwrap();
 
         // WinSW-specific reset_failure_time should be used, not reset_after_secs
         assert_eq!("2 hours", get_element_value(&xml, "resetfailure"));
