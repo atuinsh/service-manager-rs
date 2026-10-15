@@ -56,6 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `stop` booted out, and returns `NotFound` for a user with no graphical login,
   where `launchctl load` reported success and loaded nothing.
 - A failed `LaunchdServiceManager::install` removes the plist it wrote.
+- The crate now depends on [`which`](https://docs.rs/which/latest/which/)
+  version 8.
 - Reflect the true MSRV of 1.75.
 - `encoding_rs` and `encoding-utils` are now only dependencies under Windows.
 
