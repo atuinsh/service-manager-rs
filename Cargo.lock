@@ -103,6 +103,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "atuin-service-manager"
+version = "0.12.0"
+dependencies = [
+ "assert_fs",
+ "cfg-if",
+ "clap 4.5.61",
+ "dirs",
+ "encoding-utils",
+ "encoding_rs",
+ "indoc",
+ "libc",
+ "log",
+ "plist",
+ "predicates",
+ "serde",
+ "which",
+ "xml-rs",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -795,26 +815,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "service-manager"
-version = "0.11.0"
-dependencies = [
- "assert_fs",
- "cfg-if",
- "clap 4.5.61",
- "dirs",
- "encoding-utils",
- "encoding_rs",
- "indoc",
- "libc",
- "log",
- "plist",
- "predicates",
- "serde",
- "which",
- "xml-rs",
-]
-
-[[package]]
 name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -876,11 +876,11 @@ name = "system-tests"
 version = "0.0.0"
 dependencies = [
  "assert_cmd",
+ "atuin-service-manager",
  "clap 3.2.25",
  "plist",
  "serde",
  "serde_json",
- "service-manager",
  "windows-service",
 ]
 

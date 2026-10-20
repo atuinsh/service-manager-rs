@@ -1,13 +1,13 @@
 [package]
-name = "service-manager"
+name = "atuin-service-manager"
 description = "Provides adapters to communicate with various operating system service managers"
 categories = ["config"]
 keywords = ["generator"]
-version = "0.11.0"
+version = "0.12.0"
 authors = ["Chip Senkbeil <chip@senkbeil.org>"]
 edition = "2021"
-homepage = "https://github.com/chipsenkbeil/service-manager-rs"
-repository = "https://github.com/chipsenkbeil/service-manager-rs"
+homepage = "https://github.com/atuinsh/service-manager-rs"
+repository = "https://github.com/atuinsh/service-manager-rs"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 rust-version = "1.75.0"

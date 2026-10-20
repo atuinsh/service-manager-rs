@@ -4,14 +4,18 @@
 [![Docs][docs_img]][docs_lnk]
 [![CI][ci_img]][ci_lnk]
 
-[ci_img]: https://github.com/chipsenkbeil/service-manager-rs/actions/workflows/ci.yml/badge.svg
-[ci_lnk]: https://github.com/chipsenkbeil/service-manager-rs/actions/workflows/ci.yml
+[ci_img]: https://github.com/atuinsh/service-manager-rs/actions/workflows/ci.yml/badge.svg
+[ci_lnk]: https://github.com/atuinsh/service-manager-rs/actions/workflows/ci.yml
 
-[crates_img]: https://img.shields.io/crates/v/service-manager.svg
-[crates_lnk]: https://crates.io/crates/service-manager
+[crates_img]: https://img.shields.io/crates/v/atuin-service-manager.svg
+[crates_lnk]: https://crates.io/crates/atuin-service-manager
 
-[docs_img]: https://docs.rs/service-manager/badge.svg
-[docs_lnk]: https://docs.rs/service-manager
+[docs_img]: https://docs.rs/atuin-service-manager/badge.svg
+[docs_lnk]: https://docs.rs/atuin-service-manager
+
+A fork of Chip Senkbeil's
+[service-manager](https://github.com/chipsenkbeil/service-manager-rs),
+maintained by [Atuin](https://github.com/atuinsh).
 
 Rust library that provides an interface towards working with the
 following service management platforms:
@@ -31,7 +35,7 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-service-manager = "0.10"
+atuin-service-manager = "0.12"
 ```
 
 ## Examples
@@ -48,7 +52,7 @@ instance provides four key methods:
 * `stop` - will stop a running service specified by a given context
 
 ```rust,no_run
-use service_manager::*;
+use atuin_service_manager::*;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -97,7 +101,7 @@ user level, you configure your manager using the generic
 `ServiceManager::set_level` function.
 
 ```rust,no_run
-use service_manager::*;
+use atuin_service_manager::*;
 
 // Create a label for our service
 let label: ServiceLabel = "com.example.my-service".parse().unwrap();
@@ -121,7 +125,7 @@ service tied to a specific platform. To that end, you can create the service
 manager explicitly and set configuration properties appropriately.
 
 ```rust,no_run
-use service_manager::*;
+use atuin_service_manager::*;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -160,7 +164,7 @@ If you need options specific to any given service manager, you should use that s
 service manager rather than the generic `ServiceManager` crate.
 
 ```rust,no_run
-use service_manager::*;
+use atuin_service_manager::*;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
